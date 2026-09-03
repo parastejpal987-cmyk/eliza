@@ -1368,6 +1368,37 @@ jobs:
             ' <<<"$diagnostic"
             unset diagnostic
 
+      - name: Classify exact Headscale API inventory
+        if: steps.cleanup_reconciliation.outputs.agent_id != ''
+        shell: bash
+        env:
+          CANARY_DIAGNOSTIC_SUFFIX: ${{ inputs.diagnose_canary_suffix }}
+          HEADSCALE_API_KEY: ${{ secrets.HEADSCALE_API_KEY }}
+        run: |
+          set -euo pipefail
+          [[ "$CANARY_DIAGNOSTIC_SUFFIX" =~ ^[a-z0-9-]{8,80}$ ]] || exit 1
+          [ -n "${HEADSCALE_API_KEY//[[:space:]]/}" ] || exit 1
+          inventory="$(
+            curl --fail --silent --show-error \
+              --connect-timeout 5 \
+              --max-time 20 \
+              --header "Authorization: Bearer $HEADSCALE_API_KEY" \
+              https://headscale-staging.eliza.app/api/v1/node
+          )"
+          jq -r --arg suffix "$CANARY_DIAGNOSTIC_SUFFIX" '
+            [(.nodes // [])[] | select((.name // "") | contains($suffix))] as $nameMatches
+            | [(.nodes // [])[] | select((.givenName // "") | contains($suffix))] as $givenNameMatches
+            | [
+                "headscale_api_name_match_count=" + (($nameMatches | length) | tostring),
+                "headscale_api_given_name_match_count=" + (($givenNameMatches | length) | tostring),
+                "headscale_api_name_match_ip_count=" + ([$nameMatches[] | select(((.ipAddresses // []) | length) > 0)] | length | tostring),
+                "headscale_api_name_match_created_at_count=" + ([$nameMatches[] | select((.createdAt // "") | fromdateiso8601? != null)] | length | tostring),
+                "headscale_api_name_match_agent_tag_count=" + ([$nameMatches[] | select(((.tags // []) | index("tag:agent")) != null)] | length | tostring)
+              ]
+            | .[]
+          ' <<<"$inventory"
+          unset inventory HEADSCALE_API_KEY CANARY_DIAGNOSTIC_SUFFIX
+
       - name: Classify exact Headscale registration exchange
         if: steps.cleanup_reconciliation.outputs.agent_id != ''
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2
