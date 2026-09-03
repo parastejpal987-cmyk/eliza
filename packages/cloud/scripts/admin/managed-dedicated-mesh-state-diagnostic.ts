@@ -48,6 +48,12 @@ type ApplicationState = {
   apiExposePortEnabled: boolean;
 };
 
+type HostRuntimeState = {
+  liveRestoreConfigured: boolean;
+  dockerServiceActive: boolean;
+  containerdServiceActive: boolean;
+};
+
 function outputFacts(output: string): Map<string, string> {
   return new Map(
     output
@@ -159,6 +165,16 @@ export function classifyApplicationState(output: string): ApplicationState {
   };
 }
 
+/** Retain only closed Docker host configuration and service-health facts. */
+export function classifyHostRuntimeState(output: string): HostRuntimeState {
+  const facts = outputFacts(output);
+  return {
+    liveRestoreConfigured: facts.get("live_restore") === "true",
+    dockerServiceActive: facts.get("docker_service") === "active",
+    containerdServiceActive: facts.get("containerd_service") === "active",
+  };
+}
+
 async function observe(
   client: DockerSSHClient,
   command: string,
@@ -256,6 +272,10 @@ async function run(suffix: string): Promise<void> {
     const inspect = await observe(
       ssh,
       `docker inspect --format '{{json .State}}' ${id}`,
+    );
+    const hostRuntime = await observe(
+      ssh,
+      `python3 -c 'import json; print("live_restore=true" if json.load(open("/etc/docker/daemon.json")).get("live-restore") is True else "live_restore=false")' 2>/dev/null || echo live_restore=false; printf 'docker_service=%s\\n' "$(systemctl is-active docker.service 2>/dev/null || true)"; printf 'containerd_service=%s\\n' "$(systemctl is-active containerd.service 2>/dev/null || true)"`,
     );
     const processState = await observe(
       ssh,
@@ -358,6 +378,7 @@ async function run(suffix: string): Promise<void> {
     const logSignals = classifyContainerLogs(logs.output);
     const runtimeState = classifyRuntimeProcessState(runtime.output);
     const applicationState = classifyApplicationState(application.output);
+    const hostRuntimeState = classifyHostRuntimeState(hostRuntime.output);
     const health = record(state?.Health);
     const dockerHealth =
       typeof health?.Status === "string" &&
@@ -368,8 +389,15 @@ async function run(suffix: string): Promise<void> {
     const configuredImage = process.env.ELIZA_AGENT_IMAGE?.trim();
     console.log(
       `MESH_DIAGNOSTIC=${JSON.stringify({
-        schemaVersion: 2,
+        schemaVersion: 3,
         targetCount: 1,
+        host: hostRuntime.ok
+          ? hostRuntimeState
+          : {
+              liveRestoreConfigured: false,
+              dockerServiceActive: false,
+              containerdServiceActive: false,
+            },
         container: {
           inspect: inspect.ok ? "success" : "error",
           status: containerStatus,

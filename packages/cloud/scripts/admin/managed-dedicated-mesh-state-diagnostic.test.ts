@@ -4,6 +4,7 @@ import { describe, expect, test } from "bun:test";
 import {
   classifyApplicationState,
   classifyContainerLogs,
+  classifyHostRuntimeState,
   classifyRuntimeProcessState,
   classifyTailscaleStatus,
 } from "./managed-dedicated-mesh-state-diagnostic";
@@ -107,6 +108,23 @@ describe("managed Dedicated mesh-state diagnostic", () => {
       root: "unknown",
       cloudProvisioned: false,
       apiExposePortEnabled: false,
+    });
+  });
+
+  test("retains only closed Docker host configuration and service facts", () => {
+    expect(
+      classifyHostRuntimeState(
+        "live_restore=true\ndocker_service=active\ncontainerd_service=active",
+      ),
+    ).toEqual({
+      liveRestoreConfigured: true,
+      dockerServiceActive: true,
+      containerdServiceActive: true,
+    });
+    expect(classifyHostRuntimeState("private-host-output")).toEqual({
+      liveRestoreConfigured: false,
+      dockerServiceActive: false,
+      containerdServiceActive: false,
     });
   });
 });

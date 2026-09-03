@@ -1355,9 +1355,11 @@ jobs:
             fi
             unset probe_status
             jq -e '
-              keys == ["application", "container", "logs", "runtime", "schemaVersion", "tailscale", "targetCount"] and
-              .schemaVersion == 2 and
+              keys == ["application", "container", "host", "logs", "runtime", "schemaVersion", "tailscale", "targetCount"] and
+              .schemaVersion == 3 and
               .targetCount == 1 and
+              (.host | keys == ["containerdServiceActive", "dockerServiceActive", "liveRestoreConfigured"]) and
+              ([.host.containerdServiceActive, .host.dockerServiceActive, .host.liveRestoreConfigured] | all(type == "boolean")) and
               (.container | keys == ["exitCode", "health", "imageMatchesConfigured", "inspect", "status"]) and
               (.container.inspect == "success" or .container.inspect == "error") and
               (.container.status | IN("created", "running", "paused", "restarting", "removing", "exited", "dead", "unknown")) and
@@ -1384,6 +1386,9 @@ jobs:
               "private_mesh_container_exit_code=" + ((.container.exitCode // "none") | tostring),
               "private_mesh_container_health=" + (.container.health // "unknown"),
               "private_mesh_container_image_matches_configured=" + ((.container.imageMatchesConfigured // "unknown") | tostring),
+              "private_mesh_host_live_restore=" + (.host.liveRestoreConfigured | tostring),
+              "private_mesh_host_docker_service_active=" + (.host.dockerServiceActive | tostring),
+              "private_mesh_host_containerd_service_active=" + (.host.containerdServiceActive | tostring),
               "private_mesh_tailscale_query=" + .tailscale.query,
               "private_mesh_tailscale_backend=" + (.tailscale.backendState // "unknown"),
               "private_mesh_tailscale_machine_authorized=" + ((.tailscale.machineAuthorized // "unknown") | tostring),
