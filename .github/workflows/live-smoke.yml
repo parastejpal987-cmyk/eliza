@@ -1796,11 +1796,21 @@ jobs:
               *'docker teardown timed out twice; recovering daemon'*) docker_recovery='started' ;;
               *) docker_recovery='not_attempted' ;;
             esac
-            unset block lower CANARY_AGENT_ID CANARY_DELETE_JOB_ID
+            recovery_failure_line="$(printf '%s\n' "$lower" | grep -F 'docker daemon recovery did not prove container removal' | tail -n 1 || true)"
+            case "$recovery_failure_line" in
+              *'recoverystage'*'live_restore_proof'*) docker_recovery_stage='live_restore_proof' ;;
+              *'recoverystage'*'docker_force_stop'*) docker_recovery_stage='docker_force_stop' ;;
+              *'recoverystage'*'docker_start'*) docker_recovery_stage='docker_start' ;;
+              *'recoverystage'*'docker_info'*) docker_recovery_stage='docker_info' ;;
+              *'recoverystage'*'exact_container_remove'*) docker_recovery_stage='exact_container_remove' ;;
+              *) docker_recovery_stage='none' ;;
+            esac
+            unset block lower recovery_failure_line CANARY_AGENT_ID CANARY_DELETE_JOB_ID
             echo "dedicated_lifecycle_signals=${signals:-none}"
             echo "dedicated_heartbeat_failure_category=$heartbeat_category"
             echo "dedicated_delete_failure_category=$delete_category"
             echo "dedicated_docker_recovery=$docker_recovery"
+            echo "dedicated_docker_recovery_failure_stage=$docker_recovery_stage"
 
       - name: Upload privacy-safe provision diagnostic
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

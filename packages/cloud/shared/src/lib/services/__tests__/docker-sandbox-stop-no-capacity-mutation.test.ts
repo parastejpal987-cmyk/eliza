@@ -206,6 +206,14 @@ describe("provider stop never mutates node capacity", () => {
       kind: "not-running-proven",
     });
     expect(commands.some((command) => command.includes("/etc/docker/daemon.json"))).toBe(true);
+    expect(commands.some((command) => command.includes("--kill-who=main"))).toBe(true);
+    expect(commands.some((command) => command.includes("systemctl start docker.service"))).toBe(
+      true,
+    );
+    expect(commands.some((command) => command.includes("docker info"))).toBe(true);
+    expect(commands.some((command) => command.includes("systemctl restart containerd"))).toBe(
+      false,
+    );
     expect(
       commands.some((command) =>
         command.includes(`timeout -k 2s 20s docker rm -f '${SANDBOX_ID}'`),
@@ -241,6 +249,7 @@ describe("provider stop never mutates node capacity", () => {
       kind: "not-running-proven",
     });
     expect(commands.some((command) => command.includes("/etc/docker/daemon.json"))).toBe(true);
+    expect(commands.some((command) => command.includes("--kill-who=main"))).toBe(true);
     expect(deleteAttempts).toBe(1);
     expect(
       commands.some((command) =>
@@ -279,6 +288,7 @@ describe("provider stop never mutates node capacity", () => {
       kind: "not-running-proven",
     });
     expect(commands.some((command) => command.includes("/etc/docker/daemon.json"))).toBe(true);
+    expect(commands.some((command) => command.includes("--kill-who=main"))).toBe(true);
     expect(deleteAttempts).toBe(1);
     expect(
       commands.some((command) =>

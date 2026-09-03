@@ -657,14 +657,14 @@ export function buildPrePullSelfHealRecoverCommand(): string {
   return [
     "set -e",
     'python3 -c \'import json; assert json.load(open("/etc/docker/daemon.json")).get("live-restore") is True\'',
-    // A socket unit commonly has no process of its own. systemctl then returns
-    // non-zero even when the Docker daemon was killed, so this destructive
-    // best-effort leg must not trip set -e before the required restart and
-    // docker-info proof run.
-    "systemctl kill -s SIGKILL docker.service docker.socket 2>/dev/null || true",
+    // Kill only the daemon's main process so live-restore can keep workloads
+    // running. A socket unit commonly has no process of its own, so stopping it
+    // is best-effort and must not trip set -e before the required start and
+    // docker-info proof run. Containerd stays running: restarting it broadens
+    // the blast radius without evidence that its API is the wedged boundary.
+    "systemctl kill --kill-who=main -s SIGKILL docker.service 2>/dev/null || true",
+    "systemctl stop docker.socket 2>/dev/null || true",
     "sleep 2",
-    "systemctl restart containerd 2>/dev/null",
-    "sleep 4",
     "systemctl reset-failed docker.service 2>/dev/null",
     "systemctl start docker.service",
     "timeout -k 2s 20s docker info >/dev/null",

@@ -41,7 +41,6 @@ import {
   isNodeUnreachableMessage,
 } from "./docker-error-classifier";
 import {
-  buildPrePullSelfHealRecoverCommand,
   clearPlacementCommandFailures,
   dockerNodeManager,
   isDockerSshCommandTimeoutError,
@@ -1665,7 +1664,7 @@ export async function probeDockerMeshJoinTerminalFailure(
  */
 const STOP_CMD_TIMEOUT_MS = 25_000;
 const TEARDOWN_ABSENCE_PROBE_TIMEOUT_MS = 12_000;
-const TEARDOWN_DOCKER_SELF_HEAL_TIMEOUT_MS = 45_000;
+const TEARDOWN_DOCKER_SELF_HEAL_STAGE_TIMEOUT_MS = 25_000;
 
 /** Cap on best-effort Headscale VPN cleanup during sandbox teardown. */
 const HEADSCALE_CLEANUP_TIMEOUT_MS = 15_000;
@@ -5459,15 +5458,33 @@ export class DockerSandboxProvider implements SandboxProvider {
         meta.hostKeyFingerprint,
         meta.sshUser,
       );
+      let recoveryStage = "live_restore_proof";
       try {
         logger.error("[docker-sandbox] Docker teardown timed out twice; recovering daemon", {
           nodeId: meta.nodeId,
           containerName: meta.containerName,
+          agentId: meta.agentId,
         });
         await recoverySsh.exec(
-          buildPrePullSelfHealRecoverCommand(),
-          TEARDOWN_DOCKER_SELF_HEAL_TIMEOUT_MS,
+          'python3 -c \'import json; assert json.load(open("/etc/docker/daemon.json")).get("live-restore") is True\'',
+          TEARDOWN_DOCKER_SELF_HEAL_STAGE_TIMEOUT_MS,
         );
+        recoveryStage = "docker_force_stop";
+        await recoverySsh.exec(
+          "systemctl kill --kill-who=main -s SIGKILL docker.service 2>/dev/null || true; systemctl stop docker.socket 2>/dev/null || true; sleep 2",
+          TEARDOWN_DOCKER_SELF_HEAL_STAGE_TIMEOUT_MS,
+        );
+        recoveryStage = "docker_start";
+        await recoverySsh.exec(
+          "systemctl reset-failed docker.service 2>/dev/null; systemctl start docker.service",
+          TEARDOWN_DOCKER_SELF_HEAL_STAGE_TIMEOUT_MS,
+        );
+        recoveryStage = "docker_info";
+        await recoverySsh.exec(
+          "timeout -k 2s 20s docker info >/dev/null",
+          TEARDOWN_DOCKER_SELF_HEAL_STAGE_TIMEOUT_MS,
+        );
+        recoveryStage = "exact_container_remove";
         await recoverySsh.exec(
           `timeout -k 2s 20s docker rm -f ${shellQuote(meta.containerName)}`,
           STOP_CMD_TIMEOUT_MS,
@@ -5477,11 +5494,14 @@ export class DockerSandboxProvider implements SandboxProvider {
         logger.info("[docker-sandbox] Docker daemon recovered and container removed", {
           nodeId: meta.nodeId,
           containerName: meta.containerName,
+          agentId: meta.agentId,
         });
       } catch (recoveryError) {
         logger.error("[docker-sandbox] Docker daemon recovery did not prove container removal", {
           nodeId: meta.nodeId,
           containerName: meta.containerName,
+          agentId: meta.agentId,
+          recoveryStage,
           failureKind: classifyDockerSshProbeError(recoveryError),
         });
       } finally {
