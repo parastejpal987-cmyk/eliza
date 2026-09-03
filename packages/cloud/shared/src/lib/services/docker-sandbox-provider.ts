@@ -5422,20 +5422,31 @@ export class DockerSandboxProvider implements SandboxProvider {
       });
     }
 
-    // A reachable host whose Docker CLI times out on both stop and force-rm is
-    // a wedged daemon, not an ordinary container failure. Repeating the same
-    // two RPCs left deletion tombstones permanently stuck. Staging may opt in
-    // to the same node recovery already used by pre-pull: it first proves
-    // live-restore is configured, restarts the daemon stack in a fresh session,
-    // proves Docker responsive, and then retries the exact-name force remove.
-    // Production remains unchanged until its protected environment explicitly
-    // enables the flag after staging acceptance.
+    const stopCommandTimedOut =
+      stopErr !== undefined && isDockerSshCommandTimeoutError(stopErr, "docker");
+    const rmCommandTimedOut =
+      rmErr !== undefined && isDockerSshCommandTimeoutError(rmErr, "docker");
+    const bothDeleteLegsLostTransport =
+      stopErr !== undefined &&
+      rmErr !== undefined &&
+      classifyDockerSshProbeError(stopErr) === "transport" &&
+      classifyDockerSshProbeError(rmErr) === "transport";
+
+    // One exact Docker-command timeout proves that SSH reached the node but the
+    // daemon failed to answer. The reconnect used before force-rm can then fail
+    // at either the command or connection layer, so requiring a second exact
+    // command-timeout signature incorrectly skipped recovery for the observed
+    // wedged-node sequence. Require both teardown legs to have lost transport
+    // and at least one exact Docker timeout instead. The fresh recovery session
+    // still proves live-restore before any daemon mutation, Docker health after
+    // restart, and exact-name removal. Production remains unchanged until its
+    // protected environment explicitly enables the flag after staging proof.
     if (
       allowUnreachableAbandon &&
       stopErr &&
       rmErr &&
-      isDockerSshCommandTimeoutError(stopErr, "docker") &&
-      isDockerSshCommandTimeoutError(rmErr, "docker") &&
+      bothDeleteLegsLostTransport &&
+      (stopCommandTimedOut || rmCommandTimedOut) &&
       containersEnv.prePullSelfHealRestartEnabled()
     ) {
       const recoverySsh = DockerSSHClient.createDedicated(
