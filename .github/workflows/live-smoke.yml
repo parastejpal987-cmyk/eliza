@@ -1133,6 +1133,20 @@ jobs:
                 || true
             )"
             lower="$(printf '%s' "$block" | tr '[:upper:]' '[:lower:]')"
+            recent_recovery_block="$(
+              sudo journalctl \
+                -u eliza-provisioning-worker.service \
+                --since '3 hours ago' \
+                -o cat \
+                --no-pager 2>/dev/null \
+                | grep -F -A 12 \
+                    -e '[docker-sandbox] Docker teardown timed out twice; recovering daemon' \
+                    -e '[docker-sandbox] Docker daemon recovered and container removed' \
+                    -e '[docker-sandbox] Docker daemon recovery did not prove container removal' \
+                | tail -n 240 \
+                || true
+            )"
+            recent_recovery_lower="$(printf '%s' "$recent_recovery_block" | tr '[:upper:]' '[:lower:]')"
             case "$lower" in
               '') category='missing' ;;
               *'permission denied'*|*'publickey'*|*'authentication methods failed'*) category='ssh_auth' ;;
@@ -1796,8 +1810,10 @@ jobs:
               *'docker teardown timed out twice; recovering daemon'*) docker_recovery='started' ;;
               *) docker_recovery='not_attempted' ;;
             esac
-            recovery_failure_line="$(printf '%s\n' "$lower" | grep -F 'docker daemon recovery did not prove container removal' | tail -n 1 || true)"
-            case "$recovery_failure_line" in
+            recent_recovery_started_count="$(printf '%s\n' "$recent_recovery_lower" | grep -Fc 'docker teardown timed out twice; recovering daemon' || true)"
+            recent_recovery_completed_count="$(printf '%s\n' "$recent_recovery_lower" | grep -Fc 'docker daemon recovered and container removed' || true)"
+            recent_recovery_failed_count="$(printf '%s\n' "$recent_recovery_lower" | grep -Fc 'docker daemon recovery did not prove container removal' || true)"
+            case "$recent_recovery_lower" in
               *'recoverystage'*'live_restore_proof'*) docker_recovery_stage='live_restore_proof' ;;
               *'recoverystage'*'docker_force_stop'*) docker_recovery_stage='docker_force_stop' ;;
               *'recoverystage'*'docker_start'*) docker_recovery_stage='docker_start' ;;
@@ -1805,12 +1821,20 @@ jobs:
               *'recoverystage'*'exact_container_remove'*) docker_recovery_stage='exact_container_remove' ;;
               *) docker_recovery_stage='none' ;;
             esac
-            unset block lower recovery_failure_line CANARY_AGENT_ID CANARY_DELETE_JOB_ID
+            self_heal_enabled=false
+            if sudo grep -Fx 'CONTAINERS_PREPULL_SELF_HEAL_RESTART=true' /opt/eliza/cloud/.env.local >/dev/null 2>&1; then
+              self_heal_enabled=true
+            fi
+            unset block lower recent_recovery_block recent_recovery_lower CANARY_AGENT_ID CANARY_DELETE_JOB_ID
             echo "dedicated_lifecycle_signals=${signals:-none}"
             echo "dedicated_heartbeat_failure_category=$heartbeat_category"
             echo "dedicated_delete_failure_category=$delete_category"
             echo "dedicated_docker_recovery=$docker_recovery"
             echo "dedicated_docker_recovery_failure_stage=$docker_recovery_stage"
+            echo "dedicated_recent_docker_recovery_started_count=$recent_recovery_started_count"
+            echo "dedicated_recent_docker_recovery_completed_count=$recent_recovery_completed_count"
+            echo "dedicated_recent_docker_recovery_failed_count=$recent_recovery_failed_count"
+            echo "dedicated_docker_self_heal_enabled=$self_heal_enabled"
 
       - name: Upload privacy-safe provision diagnostic
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
