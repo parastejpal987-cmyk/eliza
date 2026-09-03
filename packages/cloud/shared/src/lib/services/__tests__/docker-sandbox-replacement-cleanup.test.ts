@@ -1732,9 +1732,13 @@ describe("DockerSandboxProvider replacement cleanup", () => {
           ...(renameCompletion === undefined ? {} : { rename: renameCompletion }),
         }) as never,
     );
+    let containerTailnetIp = "100.64.0.42";
     const ssh = {
+      disconnect: mock(async () => {}),
       exec: mock(async (command: string) =>
-        command.includes("tailscale --socket=/tmp/tailscaled.sock ip -4") ? "100.64.0.42\n" : "",
+        command.includes("tailscale --socket=/tmp/tailscaled.sock ip -4")
+          ? `${containerTailnetIp}\n`
+          : "",
       ),
       execStdin: mock(async (command: string) => {
         if (command.includes("docker create")) return CONTAINER_ID;
@@ -1747,6 +1751,39 @@ describe("DockerSandboxProvider replacement cleanup", () => {
     spyOn(DockerSSHClient, "getClient").mockReturnValue(ssh as unknown as DockerSSHClient);
 
     try {
+      containerTailnetIp = "100.64.0.99";
+      const identityMismatch = await replacementProvider()
+        .create(
+          replacementCreateConfig({
+            replacementAttemptId: ATTEMPT_ID,
+            dockerImage: "eliza-agent:test",
+            environmentVars: {
+              ELIZAOS_CLOUD_BASE_URL: "https://api.example.test/api/v1",
+            },
+            reclaimStaleVpnNode: false,
+            onReplacementCreateAttemptStarted: async () => {},
+            onReplacementCreateIntent: async () => {},
+            onReplacementCreated: async () => {},
+            onReplacementVpnRegistered: async () => {},
+            onReplacementCreateSettled: async () => {},
+          }),
+        )
+        .catch((caught: unknown) => caught);
+      expect(identityMismatch).toBeInstanceOf(SandboxReplacementCleanupUnresolvedError);
+      expect((identityMismatch as SandboxReplacementCleanupUnresolvedError).vpnNodeId).toBe(
+        EXACT_VPN_NODE_ID,
+      );
+      expect((identityMismatch as Error).cause).toBeInstanceOf(AggregateError);
+      expect(
+        ((identityMismatch as Error).cause as AggregateError).errors.some(
+          (cause: unknown) =>
+            cause instanceof Error &&
+            "code" in cause &&
+            cause.code === "SANDBOX_HEADSCALE_DOCKER_IDENTITY_MISMATCH",
+        ),
+      ).toBe(true);
+      containerTailnetIp = "100.64.0.42";
+
       const renameFailure = new Error("rename response was lost");
       for (const scenario of ["unresolved", "unknown"] as const) {
         renameCompletion =

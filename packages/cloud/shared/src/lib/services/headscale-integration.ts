@@ -120,7 +120,7 @@ export function isCanonicalHeadscaleNodeId(value: unknown): value is string {
   );
 }
 
-/** The Docker provider builds an HTTP URL from Headscale's first address. */
+/** Validate an IPv4 address before it is used in a Docker-provider HTTP URL. */
 export function isCanonicalHeadscaleIpv4(value: unknown): value is string {
   if (typeof value !== "string") return false;
   const octets = value.split(".");
@@ -135,6 +135,17 @@ export function isCanonicalHeadscaleTailnetIpv4(value: unknown): value is string
   if (!isCanonicalHeadscaleIpv4(value)) return false;
   const [firstOctet, secondOctet] = value.split(".").map((octet) => Number.parseInt(octet, 10));
   return firstOctet === 100 && secondOctet !== undefined && secondOctet >= 64 && secondOctet <= 127;
+}
+
+/**
+ * Select the one routable IPv4 identity from Headscale's unordered address set.
+ * A node may also carry IPv6; zero or multiple CGNAT addresses are ambiguous
+ * and must remain unavailable instead of silently binding the wrong endpoint.
+ */
+function selectCanonicalHeadscaleTailnetIpv4(node: HeadscaleNode | null): string | null {
+  if (!node || !Array.isArray(node.ipAddresses)) return null;
+  const candidates = node.ipAddresses.filter(isCanonicalHeadscaleTailnetIpv4);
+  return candidates.length === 1 ? candidates[0] : null;
 }
 
 /** Reject untrusted Headscale response identities before route mutation. */
@@ -357,14 +368,8 @@ export class HeadscaleIntegration {
 
         if (node) assertCanonicalHeadscaleNode(node);
         const nodeId = typeof node?.id === "string" ? node.id : "";
-        const firstIp = Array.isArray(node?.ipAddresses) ? node.ipAddresses[0] : undefined;
-        const ip = typeof firstIp === "string" ? firstIp : "";
-        if (
-          node &&
-          nodeId &&
-          isCanonicalHeadscaleTailnetIpv4(ip) &&
-          nodeId !== options?.excludeNodeId
-        ) {
+        const ip = selectCanonicalHeadscaleTailnetIpv4(node);
+        if (node && nodeId && ip && nodeId !== options?.excludeNodeId) {
           let rename: HeadscaleRegistrationRenameCompletion = { outcome: "not-needed" };
           if (node.name !== nodeName) {
             // The adopted node otherwise keeps its collision suffix forever,

@@ -321,6 +321,20 @@ describe("Headscale node lookup is keyed on the node name (not the agentId)", ()
     expect(probes).toBe(0);
   });
 
+  test("waitForVPNRegistration selects IPv4 independently of Headscale address order", async () => {
+    const fake = {
+      getNodeByNameOrSuffixed: async (name: string) => ({
+        id: "74",
+        name,
+        ipAddresses: ["fd7a:115c:a1e0::74", "100.64.0.74"],
+      }),
+    } as unknown as HeadscaleClient;
+
+    await expect(
+      new HeadscaleIntegration(fake).waitForVPNRegistration(nodeName, 1_000),
+    ).resolves.toMatchObject({ ip: "100.64.0.74", nodeId: "74" });
+  });
+
   test("waitForVPNRegistration rejects malformed runtime node identity", async () => {
     for (const malformedNode of [
       { id: "", name: nodeName, ipAddresses: ["100.64.0.7"] },
@@ -334,6 +348,11 @@ describe("Headscale node lookup is keyed on the node name (not the agentId)", ()
       { id: "1", name: nodeName, ipAddresses: ["192.100.0.7"] },
       { id: "1", name: nodeName, ipAddresses: ["100.128.0.7"] },
       { id: "1", name: nodeName, ipAddresses: [42] },
+      {
+        id: "1",
+        name: nodeName,
+        ipAddresses: ["100.64.0.7", "100.64.0.8"],
+      },
     ]) {
       const fake = {
         getNodeByNameOrSuffixed: async () => malformedNode,

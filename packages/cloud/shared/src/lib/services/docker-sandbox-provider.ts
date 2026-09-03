@@ -4027,6 +4027,16 @@ export class DockerSandboxProvider implements SandboxProvider {
               : {}),
           },
         );
+        // Registration discovery already binds a canonical Headscale node to
+        // this attempt's hostname, exclusion fence, and creation window. Keep
+        // that immutable ID in the cleanup locator before comparing the
+        // container's self-reported address. If the final binding check fails,
+        // dropping the observed ID strands an offline Headscale node after the
+        // exact Docker candidate is retired and makes the next provision race
+        // a stale identity under the same deterministic name.
+        if (registration) {
+          vpnNodeId = registration.nodeId;
+        }
         if (registration && remoteCompletionTracker) {
           try {
             if (!createdContainerId) {
@@ -4168,7 +4178,7 @@ export class DockerSandboxProvider implements SandboxProvider {
           );
         }
         headscaleIp = registration?.ip ?? null;
-        vpnNodeId = registration?.nodeId;
+        vpnNodeId ??= registration?.nodeId;
         if (headscaleIp) {
           logger.info(
             `[docker-sandbox] Container ${containerName} registered on VPN: ${headscaleIp}`,
