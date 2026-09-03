@@ -250,6 +250,44 @@ describe("provider stop never mutates node capacity", () => {
     expect(decrementSpy).not.toHaveBeenCalled();
   });
 
+  test("an opted-in deletion recovers after a remote daemon error plus exact timeout", async () => {
+    process.env.CONTAINERS_PREPULL_SELF_HEAL_RESTART = "true";
+    const commands: string[] = [];
+    let deleteAttempts = 0;
+    execBehavior = async (command) => {
+      commands.push(command);
+      if (command.startsWith("sh -lc")) return "unknown\n";
+      if (command.startsWith("docker stop")) {
+        throw new Error(
+          "[docker-ssh] Command exited with code 1 on node: Cannot connect to the Docker daemon",
+        );
+      }
+      if (command.startsWith("docker rm")) {
+        deleteAttempts += 1;
+        if (deleteAttempts === 1) {
+          throw new Error(
+            "[docker-ssh] Command timed out after 25000ms on node: docker [redacted]",
+          );
+        }
+      }
+      return "";
+    };
+    const provider = new DockerSandboxProvider();
+    seedContainer(provider);
+
+    await expect(provider.stopForDeletion(SANDBOX_ID)).resolves.toEqual({
+      kind: "not-running-proven",
+    });
+    expect(commands.some((command) => command.includes("/etc/docker/daemon.json"))).toBe(true);
+    expect(deleteAttempts).toBe(1);
+    expect(
+      commands.some((command) =>
+        command.includes(`timeout -k 2s 20s docker rm -f '${SANDBOX_ID}'`),
+      ),
+    ).toBe(true);
+    expect(decrementSpy).not.toHaveBeenCalled();
+  });
+
   test("replacement teardown DOES still release, because nothing else owns its slot", async () => {
     // The counter-free rule is scoped to deletion, not to the provider. Suspend,
     // shutdown, sleep, warm-claim retire and ghost cleanup all reach the same

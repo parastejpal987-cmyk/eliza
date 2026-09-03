@@ -5426,26 +5426,30 @@ export class DockerSandboxProvider implements SandboxProvider {
       stopErr !== undefined && isDockerSshCommandTimeoutError(stopErr, "docker");
     const rmCommandTimedOut =
       rmErr !== undefined && isDockerSshCommandTimeoutError(rmErr, "docker");
-    const bothDeleteLegsLostTransport =
+    const stopFailureProvesGone =
       stopErr !== undefined &&
+      (allowUnreachableAbandon
+        ? isAlreadyGoneMessage(stopErr instanceof Error ? stopErr.message : String(stopErr))
+        : isContainerAbsentMessage(stopErr instanceof Error ? stopErr.message : String(stopErr)));
+    const rmFailureProvesGone =
       rmErr !== undefined &&
-      classifyDockerSshProbeError(stopErr) === "transport" &&
-      classifyDockerSshProbeError(rmErr) === "transport";
+      (allowUnreachableAbandon
+        ? isAlreadyGoneMessage(rmErr instanceof Error ? rmErr.message : String(rmErr))
+        : isContainerAbsentMessage(rmErr instanceof Error ? rmErr.message : String(rmErr)));
 
     // One exact Docker-command timeout proves that SSH reached the node but the
-    // daemon failed to answer. The reconnect used before force-rm can then fail
-    // at either the command or connection layer, so requiring a second exact
-    // command-timeout signature incorrectly skipped recovery for the observed
-    // wedged-node sequence. Require both teardown legs to have lost transport
-    // and at least one exact Docker timeout instead. The fresh recovery session
-    // still proves live-restore before any daemon mutation, Docker health after
-    // restart, and exact-name removal. Production remains unchanged until its
-    // protected environment explicitly enables the flag after staging proof.
+    // daemon failed to answer. The other leg may fail at the connection layer
+    // or return a remote Docker-daemon error, so requiring both errors to have
+    // the same transport classification skips a real wedged-node sequence.
+    // Neither failure may prove absence. The fresh recovery session still
+    // proves live-restore before mutation, Docker health after restart, and
+    // exact-name removal. Production remains protected-off until staging proof.
     if (
       allowUnreachableAbandon &&
       stopErr &&
       rmErr &&
-      bothDeleteLegsLostTransport &&
+      !stopFailureProvesGone &&
+      !rmFailureProvesGone &&
       (stopCommandTimedOut || rmCommandTimedOut) &&
       containersEnv.prePullSelfHealRestartEnabled()
     ) {
@@ -5502,12 +5506,8 @@ export class DockerSandboxProvider implements SandboxProvider {
       // already gone — that is a success, not a failure. We only escalate
       // when both calls failed for a reason that does NOT indicate the
       // container is absent (SSH down, Docker daemon hung, etc.).
-      const stopIsGone = allowUnreachableAbandon
-        ? isAlreadyGoneMessage(stopMsg)
-        : isContainerAbsentMessage(stopMsg);
-      const rmIsGone = allowUnreachableAbandon
-        ? isAlreadyGoneMessage(rmMsg)
-        : isContainerAbsentMessage(rmMsg);
+      const stopIsGone = stopFailureProvesGone;
+      const rmIsGone = rmFailureProvesGone;
       // An UNREACHABLE node (SSH connect timeout, refused/unreachable socket,
       // DNS failure on BOTH legs) is treated as TERMINAL: the delete is
       // completed instead of re-queued. Re-queuing an unreachable delete re-runs
