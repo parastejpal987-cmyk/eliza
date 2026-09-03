@@ -1438,6 +1438,7 @@ jobs:
                   .[]
                   | select((.name // "") | contains($suffix))
                 ] as $nodes
+                | ([.[] | select(.name == "cp-staging-router")]) as $controlPlaneNodes
                 | ($nodes | map(select(.name == $expected))) as $exact
                 | ($nodes | map(select(
                     (.name // "") as $name
@@ -1448,13 +1449,18 @@ jobs:
                     "headscale_canary_node_count=" + (($nodes | length) | tostring),
                     "headscale_canary_node_online_count=" + ([$nodes[] | select(.online == true)] | length | tostring),
                     "headscale_canary_node_ip_count=" + ([$nodes[] | select(((.ipAddresses // .ip_addresses // []) | length) > 0)] | length | tostring),
+                    "headscale_canary_agent_tag_count=" + ([$nodes[] | select(((.tags // []) | index("tag:agent")) != null)] | length | tostring),
                     "headscale_canary_node_name_category=" + (
                       if ($exact | length) > 0 then "exact"
                       elif ($suffixed | length) > 0 then "collision_suffix"
                       elif ($nodes | length) > 0 then "unexpected_suffix"
                       else "absent"
                       end
-                    )
+                    ),
+                    "headscale_control_plane_node_count=" + (($controlPlaneNodes | length) | tostring),
+                    "headscale_control_plane_node_online_count=" + ([$controlPlaneNodes[] | select(.online == true)] | length | tostring),
+                    "headscale_control_plane_node_ip_count=" + ([$controlPlaneNodes[] | select(((.ipAddresses // .ip_addresses // []) | length) > 0)] | length | tostring),
+                    "headscale_control_plane_proxy_tag_count=" + ([$controlPlaneNodes[] | select(((.tags // []) | index("tag:eliza-proxy")) != null)] | length | tostring)
                   ]
                 | .[]
               ' <<<"$inventory"
