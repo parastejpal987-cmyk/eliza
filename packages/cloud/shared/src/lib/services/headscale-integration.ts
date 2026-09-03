@@ -26,16 +26,18 @@ const POLL_INTERVAL_MAX_MS = 8_000;
  * Default timeout for VPN/headscale registration (ms), env-overridable via
  * `VPN_REGISTRATION_TIMEOUT_MS`.
  *
- * 180s, not 60s: a cold container can take well over a minute to boot and run
- * `tailscale up`, so the old hardcoded 60s expired BEFORE the node finished
- * registering. The caller then logged "continuing without VPN" and the agent
- * answered 404 over the router despite the container being up. 180s clears a
- * cold registration with margin; this is the value 0xSolace set on the live box
- * while working the outage, and the env override lets ops retune without a
- * redeploy. Exported so the docker-sandbox provider shares this single source
- * of truth instead of hardcoding its own timeout at the call site.
+ * 360s, not 180s: the production Headscale edge has taken longer than the old
+ * 120-second container join fence. That killed the first `tailscale up`, then
+ * the worker exhausted its 180-second observation while Docker restarted and
+ * the persisted identity was still reconnecting. Give the managed join one
+ * five-minute attempt and retain a final minute for control-plane observation.
+ * The env override lets ops raise this without a redeploy, but never shorten
+ * it below the proven cold-path budget.
  */
-const MIN_REGISTRATION_TIMEOUT_MS = 180_000;
+const MIN_REGISTRATION_TIMEOUT_MS = 360_000;
+
+/** Bounded managed-container join attempt, shorter than the worker observer. */
+const MANAGED_TS_UP_TIMEOUT_SECONDS = "300";
 
 /** Resolve the worker's mesh observation budget without permitting early abandonment. */
 export function resolveRegistrationTimeoutMs(raw: string | undefined): number {
@@ -283,6 +285,7 @@ export class HeadscaleIntegration {
         // managed agent on the authenticated endpoint whose TS2021 upgrade is
         // part of the control-plane convergence contract.
         TS_FORCE_NOISE_443: "1",
+        TS_UP_TIMEOUT_SECONDS: MANAGED_TS_UP_TIMEOUT_SECONDS,
         TS_HOSTNAME: tsHostname,
         TS_STATE_DIR: "/var/lib/tailscale",
         TS_EXTRA_ARGS: "--accept-routes",
@@ -311,7 +314,7 @@ export class HeadscaleIntegration {
    *
    * @param nodeName  Headscale node name the container registers under
    *                  (TS_HOSTNAME = inferTailscaleHostname; NOT the bare agentId).
-   * @param timeoutMs Maximum time to wait (default {@link DEFAULT_REGISTRATION_TIMEOUT_MS}, 180 s; env-overridable via `VPN_REGISTRATION_TIMEOUT_MS`).
+   * @param timeoutMs Maximum time to wait (default {@link DEFAULT_REGISTRATION_TIMEOUT_MS}, 360 s; env-overridable via `VPN_REGISTRATION_TIMEOUT_MS`).
    * @returns The first VPN IP and exact node id together with explicit rename
    *          completion evidence, or `null` if registration was not observed.
    */

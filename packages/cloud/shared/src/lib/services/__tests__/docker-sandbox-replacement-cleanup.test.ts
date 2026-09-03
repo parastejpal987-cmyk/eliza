@@ -3101,7 +3101,7 @@ describe("DockerSandboxProvider replacement cleanup", () => {
     const laterNode = headscaleNode(
       "1413",
       "agent-replacement-ab12cd34",
-      "2026-07-23T00:09:00.000Z",
+      "2026-07-23T00:12:00.000Z",
     );
     const listNodes = spyOn(headscaleClient, "listNodesStrict").mockResolvedValue([laterNode]);
     const deleteVpn = spyOn(headscaleClient, "deleteNode").mockResolvedValue();

@@ -1305,10 +1305,10 @@ const HEALTH_CHECK_POLL_INTERVAL_MS = 3_000;
 
 /**
  * Headscale can publish the peer before the local tailscaled status snapshot
- * exposes its assigned IPv4. The container entrypoint gives `tailscale up`
- * 122 seconds including its outer escape, so keep the provider-side binding
- * observer just beyond that window instead of turning this transient state
- * into a permanent identity mismatch.
+ * exposes its assigned IPv4. Registration discovery already spent the bounded
+ * server-side join budget; retain another two-minute local-netmap window
+ * instead of turning this distinct transient into a permanent identity
+ * mismatch.
  */
 const HEADSCALE_DOCKER_BINDING_MAX_OBSERVATIONS = 130;
 const HEADSCALE_DOCKER_BINDING_POLL_INTERVAL_MS = 1_000;
