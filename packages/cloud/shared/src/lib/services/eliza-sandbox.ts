@@ -1250,12 +1250,15 @@ const UPGRADE_RUNTIME_HEALTH_GATE_TIMEOUT_MS = 30_000;
 // pre-cutover replacement out of the crash-recovery sweep long enough for the
 // 15-minute cold-boot job ceiling and any bounded leaf cleanup to settle.
 const PRE_CUTOVER_REPLACEMENT_SWEEP_GRACE_MINUTES = 30;
-// Hard cap on the container+VPN teardown during agent delete. The underlying
-// docker rm (60s) and headscale deletion (15s) are each internally bounded, but
-// an EARLY hang (SSH connect / provider init) was not — and a single stuck node
-// could then hang the delete past the 300s job watchdog and wedge the whole
-// provisioning worker. Generous over the internal caps, well under the watchdog.
-const SANDBOX_DELETE_STOP_TIMEOUT_MS = 120_000;
+// Hard cap on the container+VPN teardown during agent delete. The ordinary
+// path remains much shorter, but opted-in daemon recovery can consume the
+// bounded absence probe, stop, force-remove, daemon restart, exact removal,
+// and Headscale cleanup in sequence. The former 120-second race expired before
+// that independently bounded chain could finish, persisted a false unresolved
+// tombstone, and left the recovery promise running without an owner. 180
+// seconds covers the full 147-second leaf budget plus connection overhead while
+// remaining safely below the provisioning worker's 300-second watchdog.
+const SANDBOX_DELETE_STOP_TIMEOUT_MS = 180_000;
 type LifecycleTx = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
 /** Columns the tailnet-IP reconcile path reads to locate and repair an agent. */
