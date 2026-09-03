@@ -360,6 +360,21 @@ describe("managed dedicated live-smoke workflow contract", () => {
       "docker_connection_error",
     );
     expect(lifecycleJournal?.run ?? lifecycleJournal?.with?.script).toContain(
+      "teardown_locator_unresolved",
+    );
+    expect(lifecycleJournal?.run ?? lifecycleJournal?.with?.script).toContain(
+      "teardown_node_metadata_missing",
+    );
+    expect(lifecycleJournal?.run ?? lifecycleJournal?.with?.script).toContain(
+      "teardown_node_hostname_missing",
+    );
+    expect(lifecycleJournal?.run ?? lifecycleJournal?.with?.script).toContain(
+      "teardown_runtime_ports_missing",
+    );
+    expect(lifecycleJournal?.run ?? lifecycleJournal?.with?.script).toContain(
+      "docker_stop_pair_failed",
+    );
+    expect(lifecycleJournal?.run ?? lifecycleJournal?.with?.script).toContain(
       "timestamp_shape_invalid",
     );
     expect(lifecycleJournal?.run ?? lifecycleJournal?.with?.script).toContain(

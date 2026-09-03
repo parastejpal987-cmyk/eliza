@@ -1749,6 +1749,11 @@ jobs:
               *'[docker-ssh] command timed out'*) delete_category='docker_command_timeout' ;;
               *'[docker-ssh] connection to '*'timed out'*) delete_category='docker_connect_timeout' ;;
               *'[docker-ssh] connection error'*) delete_category='docker_connection_error' ;;
+              *'not found in memory or db. cannot resolve target node'*) delete_category='teardown_locator_unresolved' ;;
+              *'missing persisted docker node metadata'*) delete_category='teardown_node_metadata_missing' ;;
+              *'docker node '*' is missing hostname'*) delete_category='teardown_node_hostname_missing' ;;
+              *'missing port data for'*) delete_category='teardown_runtime_ports_missing' ;;
+              *'failed to stop container'*) delete_category='docker_stop_pair_failed' ;;
               *'failed to delete sandbox'*) delete_category='sandbox_stop_failed' ;;
               *'value.toisostring is not a function'*) delete_category='timestamp_shape_invalid' ;;
               *'still owns backup catalog v2 authority'*) delete_category='backup_catalog_authority_retained' ;;
