@@ -1253,12 +1253,14 @@ const PRE_CUTOVER_REPLACEMENT_SWEEP_GRACE_MINUTES = 30;
 // Hard cap on the container+VPN teardown during agent delete. The ordinary
 // path remains much shorter, but opted-in daemon recovery can consume the
 // bounded absence probe, stop, force-remove, daemon restart, exact removal,
-// and Headscale cleanup in sequence. The former 120-second race expired before
-// that independently bounded chain could finish, persisted a false unresolved
-// tombstone, and left the recovery promise running without an owner. 180
-// seconds covers the full 147-second leaf budget plus connection overhead while
-// remaining safely below the provisioning worker's 300-second watchdog.
-const SANDBOX_DELETE_STOP_TIMEOUT_MS = 180_000;
+// and Headscale cleanup in sequence. Each fresh isolated SSH session also owns
+// a bounded 10-second handshake before its command timer begins, so the full
+// worst-case chain is about 177 seconds before scheduling/DB overhead. The
+// former 120- and 180-second races expired before that chain could settle,
+// persisted a false unresolved tombstone, and left the recovery promise
+// running without an owner. 240 seconds leaves bounded settlement headroom
+// while remaining below the provisioning worker's 300-second watchdog.
+const SANDBOX_DELETE_STOP_TIMEOUT_MS = 240_000;
 type LifecycleTx = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
 /** Columns the tailnet-IP reconcile path reads to locate and repair an agent. */
