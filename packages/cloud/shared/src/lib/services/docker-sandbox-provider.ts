@@ -5435,6 +5435,23 @@ export class DockerSandboxProvider implements SandboxProvider {
       (allowUnreachableAbandon
         ? isAlreadyGoneMessage(rmErr instanceof Error ? rmErr.message : String(rmErr))
         : isContainerAbsentMessage(rmErr instanceof Error ? rmErr.message : String(rmErr)));
+    const dockerSelfHealEnabled = containersEnv.prePullSelfHealRestartEnabled();
+
+    if (stopErr && rmErr) {
+      logger.info("[docker-sandbox] Docker teardown recovery decision", {
+        nodeId: meta.nodeId,
+        containerName: meta.containerName,
+        agentId: meta.agentId,
+        allowUnreachableAbandon,
+        dockerSelfHealEnabled,
+        stopCommandTimedOut,
+        rmCommandTimedOut,
+        stopFailureProvesGone,
+        rmFailureProvesGone,
+        stopFailureKind: classifyDockerSshProbeError(stopErr),
+        rmFailureKind: classifyDockerSshProbeError(rmErr),
+      });
+    }
 
     // One exact Docker-command timeout proves that SSH reached the node but the
     // daemon failed to answer. The other leg may fail at the connection layer
@@ -5450,7 +5467,7 @@ export class DockerSandboxProvider implements SandboxProvider {
       !stopFailureProvesGone &&
       !rmFailureProvesGone &&
       (stopCommandTimedOut || rmCommandTimedOut) &&
-      containersEnv.prePullSelfHealRestartEnabled()
+      dockerSelfHealEnabled
     ) {
       const recoverySsh = DockerSSHClient.createDedicated(
         meta.hostname,

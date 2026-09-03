@@ -1705,6 +1705,7 @@ jobs:
                 -o cat \
                 --no-pager 2>/dev/null \
                 | grep -F -A 12 \
+                    -e '[docker-sandbox] Docker teardown recovery decision' \
                     -e '[docker-sandbox] Docker teardown timed out twice; recovering daemon' \
                     -e '[docker-sandbox] Docker daemon recovered and container removed' \
                     -e '[docker-sandbox] Docker daemon recovery did not prove container removal' \
@@ -1813,6 +1814,7 @@ jobs:
             recent_recovery_started_count="$(printf '%s\n' "$recent_recovery_lower" | grep -Fc 'docker teardown timed out twice; recovering daemon' || true)"
             recent_recovery_completed_count="$(printf '%s\n' "$recent_recovery_lower" | grep -Fc 'docker daemon recovered and container removed' || true)"
             recent_recovery_failed_count="$(printf '%s\n' "$recent_recovery_lower" | grep -Fc 'docker daemon recovery did not prove container removal' || true)"
+            recent_recovery_decision_count="$(printf '%s\n' "$recent_recovery_lower" | grep -Fc 'docker teardown recovery decision' || true)"
             case "$recent_recovery_lower" in
               *'recoverystage'*'live_restore_proof'*) docker_recovery_stage='live_restore_proof' ;;
               *'recoverystage'*'docker_force_stop'*) docker_recovery_stage='docker_force_stop' ;;
@@ -1822,7 +1824,11 @@ jobs:
               *) docker_recovery_stage='none' ;;
             esac
             self_heal_enabled=false
-            if sudo grep -Fx 'CONTAINERS_PREPULL_SELF_HEAL_RESTART=true' /opt/eliza/cloud/.env.local >/dev/null 2>&1; then
+            if printf 'true' | sudo node \
+              /usr/local/lib/eliza-admin/systemd-environment-line.mjs \
+              equals \
+              /opt/eliza/cloud/.env.local \
+              CONTAINERS_PREPULL_SELF_HEAL_RESTART >/dev/null 2>&1; then
               self_heal_enabled=true
             fi
             unset block lower recent_recovery_block recent_recovery_lower CANARY_AGENT_ID CANARY_DELETE_JOB_ID
@@ -1834,6 +1840,7 @@ jobs:
             echo "dedicated_recent_docker_recovery_started_count=$recent_recovery_started_count"
             echo "dedicated_recent_docker_recovery_completed_count=$recent_recovery_completed_count"
             echo "dedicated_recent_docker_recovery_failed_count=$recent_recovery_failed_count"
+            echo "dedicated_recent_docker_recovery_decision_count=$recent_recovery_decision_count"
             echo "dedicated_docker_self_heal_enabled=$self_heal_enabled"
 
       - name: Upload privacy-safe provision diagnostic
