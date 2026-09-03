@@ -244,6 +244,7 @@ function replacementProvider(options?: { now?: () => number }): DockerSandboxPro
   spyOn(dockerNodesRepository, "findByIdOnPrimary").mockResolvedValue(NODE);
   return new DockerSandboxProvider({
     replacementVpnSettleDelay: async () => {},
+    headscaleDockerBindingDelay: async () => {},
     ...(options?.now ? { now: options.now } : {}),
   });
 }
@@ -1723,7 +1724,7 @@ describe("DockerSandboxProvider replacement cleanup", () => {
       },
       previousNodeId: PREVIOUS_VPN_NODE_ID,
     });
-    let renameCompletion: unknown;
+    let renameCompletion: unknown = { outcome: "not-needed" };
     spyOn(headscaleIntegration, "waitForVPNRegistration").mockImplementation(
       async () =>
         ({
@@ -1733,13 +1734,17 @@ describe("DockerSandboxProvider replacement cleanup", () => {
         }) as never,
     );
     let containerTailnetIp = "100.64.0.42";
+    let transientEmptyTailnetReads = 0;
     const ssh = {
       disconnect: mock(async () => {}),
-      exec: mock(async (command: string) =>
-        command.includes("tailscale --socket=/tmp/tailscaled.sock ip -4")
-          ? `${containerTailnetIp}\n`
-          : "",
-      ),
+      exec: mock(async (command: string) => {
+        if (!command.includes("tailscale --socket=/tmp/tailscaled.sock ip -4")) return "";
+        if (transientEmptyTailnetReads > 0) {
+          transientEmptyTailnetReads -= 1;
+          return "\n";
+        }
+        return `${containerTailnetIp}\n`;
+      }),
       execStdin: mock(async (command: string) => {
         if (command.includes("docker create")) return CONTAINER_ID;
         if (command.includes("steward-agent-register")) {
@@ -1751,6 +1756,25 @@ describe("DockerSandboxProvider replacement cleanup", () => {
     spyOn(DockerSSHClient, "getClient").mockReturnValue(ssh as unknown as DockerSSHClient);
 
     try {
+      transientEmptyTailnetReads = 2;
+      const delayedBinding = await replacementProvider().create(
+        replacementCreateConfig({
+          replacementAttemptId: ATTEMPT_ID,
+          dockerImage: "eliza-agent:test",
+          environmentVars: {
+            ELIZAOS_CLOUD_BASE_URL: "https://api.example.test/api/v1",
+          },
+          reclaimStaleVpnNode: false,
+          onReplacementCreateAttemptStarted: async () => {},
+          onReplacementCreateIntent: async () => {},
+          onReplacementCreated: async () => {},
+          onReplacementVpnRegistered: async () => {},
+          onReplacementCreateSettled: async () => {},
+        }),
+      );
+      expect(delayedBinding.metadata?.vpnNodeId).toBe(EXACT_VPN_NODE_ID);
+      expect(transientEmptyTailnetReads).toBe(0);
+
       containerTailnetIp = "100.64.0.99";
       const identityMismatch = await replacementProvider()
         .create(

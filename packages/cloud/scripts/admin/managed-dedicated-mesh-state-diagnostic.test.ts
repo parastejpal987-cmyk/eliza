@@ -2,6 +2,7 @@
 
 import { describe, expect, test } from "bun:test";
 import {
+  classifyApplicationState,
   classifyContainerLogs,
   classifyRuntimeProcessState,
   classifyTailscaleStatus,
@@ -87,6 +88,25 @@ describe("managed Dedicated mesh-state diagnostic", () => {
       tailscaleUpProcessPresent: false,
       forceNoise443Enabled: false,
       stuckCliEscapePresent: false,
+    });
+  });
+
+  test("retains only closed application listener and runtime-mode facts", () => {
+    expect(
+      classifyApplicationState(
+        "health=unreachable\nroot=response\ncloud_provisioned=true\napi_expose_port=false",
+      ),
+    ).toEqual({
+      health: "unreachable",
+      root: "response",
+      cloudProvisioned: true,
+      apiExposePortEnabled: false,
+    });
+    expect(classifyApplicationState("health=private-status")).toEqual({
+      health: "unknown",
+      root: "unknown",
+      cloudProvisioned: false,
+      apiExposePortEnabled: false,
     });
   });
 });

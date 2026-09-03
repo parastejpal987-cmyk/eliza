@@ -1355,12 +1355,13 @@ jobs:
             fi
             unset probe_status
             jq -e '
-              keys == ["container", "logs", "runtime", "schemaVersion", "tailscale", "targetCount"] and
+              keys == ["application", "container", "logs", "runtime", "schemaVersion", "tailscale", "targetCount"] and
               .schemaVersion == 2 and
               .targetCount == 1 and
-              (.container | keys == ["exitCode", "imageMatchesConfigured", "inspect", "status"]) and
+              (.container | keys == ["exitCode", "health", "imageMatchesConfigured", "inspect", "status"]) and
               (.container.inspect == "success" or .container.inspect == "error") and
               (.container.status | IN("created", "running", "paused", "restarting", "removing", "exited", "dead", "unknown")) and
+              (.container.health | IN("starting", "healthy", "unhealthy", "none", "unknown")) and
               (.container.exitCode == null or (.container.exitCode | type == "number")) and
               (.container.imageMatchesConfigured == null or (.container.imageMatchesConfigured | type == "boolean")) and
               (.tailscale | keys == ["authUrlPresent", "backendState", "daemonPresent", "ipPresent", "machineAuthorized", "query", "socketPresent"]) and
@@ -1373,10 +1374,15 @@ jobs:
               (.runtime | keys == ["agentProcessPresent", "entrypointProcessPresent", "forceNoise443Enabled", "pid1", "stuckCliEscapePresent", "tailscaleUpProcessPresent"]) and
               (.runtime.pid1 | IN("agent", "entrypoint", "other", "tailscale-up", "unknown")) and
               ([.runtime.agentProcessPresent, .runtime.entrypointProcessPresent, .runtime.forceNoise443Enabled, .runtime.stuckCliEscapePresent, .runtime.tailscaleUpProcessPresent] | all(type == "boolean"))
+              and (.application | keys == ["apiExposePortEnabled", "cloudProvisioned", "health", "root"])
+              and (.application.health | IN("accepted", "response", "unreachable", "unknown"))
+              and (.application.root | IN("accepted", "response", "unreachable", "unknown"))
+              and ([.application.apiExposePortEnabled, .application.cloudProvisioned] | all(type == "boolean"))
             ' <<<"$diagnostic" >/dev/null
             jq -r '
               "private_mesh_container_status=" + .container.status,
               "private_mesh_container_exit_code=" + ((.container.exitCode // "none") | tostring),
+              "private_mesh_container_health=" + (.container.health // "unknown"),
               "private_mesh_container_image_matches_configured=" + ((.container.imageMatchesConfigured // "unknown") | tostring),
               "private_mesh_tailscale_query=" + .tailscale.query,
               "private_mesh_tailscale_backend=" + (.tailscale.backendState // "unknown"),
@@ -1394,7 +1400,11 @@ jobs:
               "private_mesh_runtime_entrypoint_process=" + (.runtime.entrypointProcessPresent | tostring),
               "private_mesh_runtime_tailscale_up_process=" + (.runtime.tailscaleUpProcessPresent | tostring),
               "private_mesh_runtime_force_noise_443=" + (.runtime.forceNoise443Enabled | tostring),
-              "private_mesh_runtime_stuck_cli_escape=" + (.runtime.stuckCliEscapePresent | tostring)
+              "private_mesh_runtime_stuck_cli_escape=" + (.runtime.stuckCliEscapePresent | tostring),
+              "private_mesh_application_health=" + (.application.health // "unknown"),
+              "private_mesh_application_root=" + (.application.root // "unknown"),
+              "private_mesh_application_cloud_provisioned=" + (.application.cloudProvisioned | tostring),
+              "private_mesh_application_api_expose_port=" + (.application.apiExposePortEnabled | tostring)
             ' <<<"$diagnostic"
             unset diagnostic
 

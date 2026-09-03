@@ -41,6 +41,22 @@ type RuntimeProcessState = {
   stuckCliEscapePresent: boolean;
 };
 
+type ApplicationState = {
+  health: "accepted" | "response" | "unreachable" | "unknown";
+  root: "accepted" | "response" | "unreachable" | "unknown";
+  cloudProvisioned: boolean;
+  apiExposePortEnabled: boolean;
+};
+
+function outputFacts(output: string): Map<string, string> {
+  return new Map(
+    output
+      .split("\n")
+      .map((line) => line.trim().split("=", 2))
+      .filter((pair): pair is [string, string] => pair.length === 2),
+  );
+}
+
 function record(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -108,12 +124,7 @@ export function classifyContainerLogs(output: string): {
 export function classifyRuntimeProcessState(
   output: string,
 ): RuntimeProcessState {
-  const facts = new Map(
-    output
-      .split("\n")
-      .map((line) => line.trim().split("=", 2))
-      .filter((pair): pair is [string, string] => pair.length === 2),
-  );
+  const facts = outputFacts(output);
   const pid1 = facts.get("pid1");
   return {
     pid1:
@@ -128,6 +139,23 @@ export function classifyRuntimeProcessState(
     tailscaleUpProcessPresent: facts.get("tailscale_up") === "present",
     forceNoise443Enabled: facts.get("force_noise_443") === "enabled",
     stuckCliEscapePresent: facts.get("stuck_cli_escape") === "present",
+  };
+}
+
+/** Retain only closed localhost-listener and runtime-mode facts. */
+export function classifyApplicationState(output: string): ApplicationState {
+  const facts = outputFacts(output);
+  const classifyProbe = (
+    value: string | undefined,
+  ): ApplicationState["health"] =>
+    value === "accepted" || value === "response" || value === "unreachable"
+      ? value
+      : "unknown";
+  return {
+    health: classifyProbe(facts.get("health")),
+    root: classifyProbe(facts.get("root")),
+    cloudProvisioned: facts.get("cloud_provisioned") === "true",
+    apiExposePortEnabled: facts.get("api_expose_port") === "true",
   };
 }
 
@@ -274,6 +302,27 @@ async function run(suffix: string): Promise<void> {
           "$pid1" "$agent" "$entrypoint" "$tailscale_up" "$force_noise_443" "$stuck_cli_escape"
       '`,
     );
+    const application = await observe(
+      ssh,
+      `docker exec ${id} sh -c '
+        port="\${PORT:-\${APP_PORT:-\${ELIZA_PORT:-2138}}}"
+        classify_url() {
+          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$1" 2>/dev/null || true)
+          case "$code" in
+            200|301|302|401) printf accepted ;;
+            000|"") printf unreachable ;;
+            *) printf response ;;
+          esac
+        }
+        health=$(classify_url "http://127.0.0.1:$port/api/health")
+        root=$(classify_url "http://127.0.0.1:$port/")
+        [ "\${ELIZA_CLOUD_PROVISIONED:-}" = "1" ] && cloud_provisioned=true || cloud_provisioned=false
+        case "\${ELIZA_API_EXPOSE_PORT:-}" in 1|true) api_expose_port=true ;; *) api_expose_port=false ;; esac
+        printf "health=%s\\nroot=%s\\ncloud_provisioned=%s\\napi_expose_port=%s\\n" \
+          "$health" "$root" "$cloud_provisioned" "$api_expose_port"
+      '`,
+      15_000,
+    );
     const image = await observe(
       ssh,
       `docker inspect --format '{{.Config.Image}}' ${id}`,
@@ -308,6 +357,13 @@ async function run(suffix: string): Promise<void> {
     const tailscale = classifyTailscaleStatus(status.output);
     const logSignals = classifyContainerLogs(logs.output);
     const runtimeState = classifyRuntimeProcessState(runtime.output);
+    const applicationState = classifyApplicationState(application.output);
+    const health = record(state?.Health);
+    const dockerHealth =
+      typeof health?.Status === "string" &&
+      ["starting", "healthy", "unhealthy", "none"].includes(health.Status)
+        ? health.Status
+        : "unknown";
     // biome-ignore lint/suspicious/noUndeclaredEnvVars: the protected worker EnvironmentFile owns this deployment value.
     const configuredImage = process.env.ELIZA_AGENT_IMAGE?.trim();
     console.log(
@@ -318,6 +374,7 @@ async function run(suffix: string): Promise<void> {
           inspect: inspect.ok ? "success" : "error",
           status: containerStatus,
           exitCode,
+          health: dockerHealth,
           imageMatchesConfigured:
             image.ok && configuredImage
               ? image.output.trim() === configuredImage
@@ -335,6 +392,14 @@ async function run(suffix: string): Promise<void> {
         },
         logs: logSignals,
         runtime: runtimeState,
+        application: application.ok
+          ? applicationState
+          : {
+              health: "unknown",
+              root: "unknown",
+              cloudProvisioned: false,
+              apiExposePortEnabled: false,
+            },
       })}`,
     );
   } finally {

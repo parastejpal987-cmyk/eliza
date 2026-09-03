@@ -1304,6 +1304,16 @@ export function buildStewardProxyEnv(env: NodeJS.ProcessEnv = process.env): Reco
 const HEALTH_CHECK_POLL_INTERVAL_MS = 3_000;
 
 /**
+ * Headscale can publish the peer before the local tailscaled status snapshot
+ * exposes its assigned IPv4. The container entrypoint gives `tailscale up`
+ * 122 seconds including its outer escape, so keep the provider-side binding
+ * observer just beyond that window instead of turning this transient state
+ * into a permanent identity mismatch.
+ */
+const HEADSCALE_DOCKER_BINDING_MAX_OBSERVATIONS = 130;
+const HEADSCALE_DOCKER_BINDING_POLL_INTERVAL_MS = 1_000;
+
+/**
  * Health-check polling: total timeout (ms). A cold dedicated agent (first image
  * pull + agent boot + ~20 plugins loading) can take up to ~5 min before
  * `/api/health` answers over the tailnet; 180s lost that race and failed the
@@ -2150,14 +2160,19 @@ export class DockerSandboxProvider implements SandboxProvider {
    */
   private containers = new Map<string, ContainerMeta>();
   private readonly replacementVpnSettleDelay: (milliseconds: number) => Promise<void>;
+  private readonly headscaleDockerBindingDelay: (milliseconds: number) => Promise<void>;
   private readonly now: () => number;
 
   constructor(options?: {
     replacementVpnSettleDelay?: (milliseconds: number) => Promise<void>;
+    headscaleDockerBindingDelay?: (milliseconds: number) => Promise<void>;
     now?: () => number;
   }) {
     this.replacementVpnSettleDelay =
       options?.replacementVpnSettleDelay ??
+      ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
+    this.headscaleDockerBindingDelay =
+      options?.headscaleDockerBindingDelay ??
       ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
     this.now = options?.now ?? Date.now;
   }
@@ -4046,14 +4061,36 @@ export class DockerSandboxProvider implements SandboxProvider {
                 severity: "fatal",
               });
             }
-            const containerTailnetOutput = await ssh.exec(
-              `docker exec ${shellQuote(createdContainerId)} tailscale --socket=/tmp/tailscaled.sock ip -4`,
-              DOCKER_CMD_TIMEOUT_MS,
-            );
-            const containerTailnetLines = containerTailnetOutput
-              .split(/\r?\n/)
-              .map((line) => line.trim())
-              .filter(Boolean);
+            let containerTailnetLines: string[] = [];
+            let lastTailnetQueryError: unknown;
+            for (
+              let observation = 0;
+              observation < HEADSCALE_DOCKER_BINDING_MAX_OBSERVATIONS;
+              observation += 1
+            ) {
+              try {
+                const containerTailnetOutput = await ssh.exec(
+                  `docker exec ${shellQuote(createdContainerId)} tailscale --socket=/tmp/tailscaled.sock ip -4`,
+                  DOCKER_CMD_TIMEOUT_MS,
+                );
+                containerTailnetLines = containerTailnetOutput
+                  .split(/\r?\n/)
+                  .map((line) => line.trim())
+                  .filter(Boolean);
+                lastTailnetQueryError = undefined;
+              } catch (error: unknown) {
+                // A joining tailscaled can reject `ip -4` before its local
+                // netmap catches up with the already-observed control-plane
+                // registration. Preserve the final cause, but let the bounded
+                // observer distinguish that transient from a terminal mismatch.
+                lastTailnetQueryError = error;
+                containerTailnetLines = [];
+              }
+              if (containerTailnetLines.length > 0) break;
+              if (observation < HEADSCALE_DOCKER_BINDING_MAX_OBSERVATIONS - 1) {
+                await this.headscaleDockerBindingDelay(HEADSCALE_DOCKER_BINDING_POLL_INTERVAL_MS);
+              }
+            }
             const containerTailnetIp = containerTailnetLines[0];
             if (
               containerTailnetLines.length !== 1 ||
@@ -4074,6 +4111,7 @@ export class DockerSandboxProvider implements SandboxProvider {
                     containerTailnetIp: containerTailnetIp ?? null,
                     containerTailnetLineCount: containerTailnetLines.length,
                   },
+                  ...(lastTailnetQueryError === undefined ? {} : { cause: lastTailnetQueryError }),
                   severity: "fatal",
                 },
               );
