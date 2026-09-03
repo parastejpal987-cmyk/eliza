@@ -375,6 +375,12 @@ describe("managed dedicated live-smoke workflow contract", () => {
       "docker_stop_pair_failed",
     );
     expect(lifecycleJournal?.run ?? lifecycleJournal?.with?.script).toContain(
+      "stopfailurekind",
+    );
+    expect(lifecycleJournal?.run ?? lifecycleJournal?.with?.script).toContain(
+      "provider_initialization",
+    );
+    expect(lifecycleJournal?.run ?? lifecycleJournal?.with?.script).toContain(
       "timestamp_shape_invalid",
     );
     expect(lifecycleJournal?.run ?? lifecycleJournal?.with?.script).toContain(

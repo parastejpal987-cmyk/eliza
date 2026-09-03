@@ -6398,6 +6398,10 @@ describe("ElizaSandboxService.deleteAgent teardown cap (#9066)", () => {
       const res = (await svc.deleteAgent(AGENT, ORG)) as { success: boolean; error?: string };
       expect(res.success).toBe(false);
       expect(res.error).toBe("Failed to delete sandbox");
+      expect(warnSpy).toHaveBeenCalledWith(
+        "[agent-sandbox] Stop failed during delete",
+        expect.objectContaining({ stopFailureKind: "docker_stop_pair_failed" }),
+      );
       // Critically: the row delete is never attempted when the container may
       // still be running.
       expect(commit).not.toHaveBeenCalled();
