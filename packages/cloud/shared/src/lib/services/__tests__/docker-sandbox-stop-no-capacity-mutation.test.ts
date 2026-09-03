@@ -78,6 +78,25 @@ afterEach(() => {
 });
 
 describe("provider stop never mutates node capacity", () => {
+  test("an exact absence probe skips mutating Docker commands on a deletion retry", async () => {
+    const commands: string[] = [];
+    execBehavior = async (command) => {
+      commands.push(command);
+      return command.startsWith("sh -lc") ? "absent\n" : "";
+    };
+    const provider = new DockerSandboxProvider();
+    seedContainer(provider);
+
+    await expect(provider.stopForDeletion(SANDBOX_ID)).resolves.toEqual({
+      kind: "not-running-proven",
+    });
+    expect(commands).toHaveLength(1);
+    expect(commands[0]).toContain("docker container inspect");
+    expect(commands[0]).not.toContain("docker stop");
+    expect(commands[0]).not.toContain("docker rm -f");
+    expect(decrementSpy).not.toHaveBeenCalled();
+  });
+
   test("a clean stop + rm leaves allocated_count to the caller", async () => {
     execBehavior = async () => "";
     const provider = new DockerSandboxProvider();

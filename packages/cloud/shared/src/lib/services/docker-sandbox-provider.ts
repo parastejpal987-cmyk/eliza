@@ -1662,6 +1662,7 @@ export async function probeDockerMeshJoinTerminalFailure(
  * cycle (and the DB advisory lock) open across the full minute.
  */
 const STOP_CMD_TIMEOUT_MS = 25_000;
+const TEARDOWN_ABSENCE_PROBE_TIMEOUT_MS = 12_000;
 
 /** Cap on best-effort Headscale VPN cleanup during sandbox teardown. */
 const HEADSCALE_CLEANUP_TIMEOUT_MS = 15_000;
@@ -5322,12 +5323,54 @@ export class DockerSandboxProvider implements SandboxProvider {
     // effectively gone.
     let stopErr: unknown;
     let rmErr: unknown;
+    let exactAbsenceProven = false;
 
     try {
+      // Deletion retries commonly arrive after an earlier attempt removed the
+      // container but failed in a later database/credential phase. Prove that
+      // exact name absent before sending Docker another mutating command. The
+      // remote coreutils timeout bounds a wedged Docker CLI independently of
+      // the SSH channel timeout; only Docker's explicit no-such-object result
+      // authorizes the short-circuit.
+      try {
+        const target = shellQuote(meta.containerName);
+        const probeScript = [
+          `probe_output=$(timeout -k 2s 8s docker container inspect --format '{{.Id}}' ${target} 2>&1)`,
+          "probe_rc=$?",
+          "if [ \"$probe_rc\" -eq 0 ]; then printf 'present\\n'",
+          "elif [ \"$probe_rc\" -eq 124 ]; then printf 'unknown\\n'",
+          "elif printf '%s' \"$probe_output\" | grep -Eqi 'no such (object|container)'; then printf 'absent\\n'",
+          "else printf 'unknown\\n'; fi",
+        ].join("; ");
+        exactAbsenceProven =
+          (
+            await ssh.exec(`sh -lc ${shellQuote(probeScript)}`, TEARDOWN_ABSENCE_PROBE_TIMEOUT_MS)
+          ).trim() === "absent";
+      } catch (probeError) {
+        // error-policy:J7 the authoritative stop/rm pair below still owns the
+        // mutation verdict; this read-only optimization may safely be unavailable.
+        logger.warn("[docker-sandbox] Exact pre-delete absence probe unavailable", {
+          nodeId: meta.nodeId,
+          containerName: meta.containerName,
+          failureKind: classifyDockerSshProbeError(probeError),
+        });
+      }
+
+      if (exactAbsenceProven) {
+        logger.info(
+          `[docker-sandbox] Container ${meta.containerName} proven absent before delete mutation`,
+        );
+      }
+
       try {
         // Graceful stop with 10s timeout, then force-remove.
-        await ssh.exec(`docker stop -t 10 ${shellQuote(meta.containerName)}`, STOP_CMD_TIMEOUT_MS);
-        logger.info(`[docker-sandbox] Container stopped: ${meta.containerName}`);
+        if (!exactAbsenceProven) {
+          await ssh.exec(
+            `docker stop -t 10 ${shellQuote(meta.containerName)}`,
+            STOP_CMD_TIMEOUT_MS,
+          );
+          logger.info(`[docker-sandbox] Container stopped: ${meta.containerName}`);
+        }
       } catch (err) {
         stopErr = err;
         logger.warn(
@@ -5353,8 +5396,10 @@ export class DockerSandboxProvider implements SandboxProvider {
       }
 
       try {
-        await ssh.exec(`docker rm -f ${shellQuote(meta.containerName)}`, STOP_CMD_TIMEOUT_MS);
-        logger.info(`[docker-sandbox] Container removed: ${meta.containerName}`);
+        if (!exactAbsenceProven) {
+          await ssh.exec(`docker rm -f ${shellQuote(meta.containerName)}`, STOP_CMD_TIMEOUT_MS);
+          logger.info(`[docker-sandbox] Container removed: ${meta.containerName}`);
+        }
       } catch (err) {
         rmErr = err;
         logger.error(
