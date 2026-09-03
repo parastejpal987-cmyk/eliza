@@ -210,6 +210,8 @@ interface ContainerMeta {
   hostKeyFingerprint?: string;
 }
 
+type TeardownContainerMeta = Omit<ContainerMeta, "bridgePort" | "webUiPort">;
+
 interface RemoteCompletionTracker {
   readonly causes: unknown[];
 }
@@ -5295,7 +5297,7 @@ export class DockerSandboxProvider implements SandboxProvider {
     allowUnreachableAbandon: boolean,
     releaseCapacity: boolean,
   ): Promise<SandboxDeletionStopOutcome> {
-    const meta = await this.resolveContainer(sandboxId);
+    const meta = await this.resolveContainerForTeardown(sandboxId);
 
     logger.info(
       `[docker-sandbox] Stopping container ${meta.containerName} on ${meta.nodeId} (${meta.hostname})`,
@@ -5884,6 +5886,48 @@ export class DockerSandboxProvider implements SandboxProvider {
     throw new Error(
       `[docker-sandbox] Container "${sandboxId}" not found in memory or DB. Cannot resolve target node.`,
     );
+  }
+
+  /**
+   * Resolve only the durable authority needed to stop a container. Failed
+   * provisions can persist node and container identity before bridge/web ports
+   * are assigned; requiring those unrelated runtime fields here made such a
+   * container impossible to delete after a worker restart.
+   */
+  private async resolveContainerForTeardown(sandboxId: string): Promise<TeardownContainerMeta> {
+    const tracked = this.containers.get(sandboxId);
+    if (tracked) return tracked;
+
+    const sandbox = await agentSandboxesRepository.findBySandboxId(sandboxId);
+    if (!sandbox || !sandbox.node_id || !sandbox.container_name) {
+      throw new Error(
+        `[docker-sandbox] Container "${sandboxId}" not found in memory or DB. Cannot resolve target node.`,
+      );
+    }
+
+    const dbNode = await dockerNodesRepository.findByNodeId(sandbox.node_id);
+    if (!dbNode) {
+      throw new Error(
+        `[docker-sandbox] Missing persisted docker node metadata for node "${sandbox.node_id}"`,
+      );
+    }
+    if (!dbNode.hostname) {
+      throw new Error(`[docker-sandbox] Docker node "${sandbox.node_id}" is missing hostname`);
+    }
+
+    return {
+      nodeId: sandbox.node_id,
+      hostname: dbNode.hostname,
+      containerName: sandbox.container_name,
+      agentId: sandbox.id,
+      // Primary provisions use the deterministic container name as
+      // TS_HOSTNAME. Rehydrating it lets a restarted worker retire the stale
+      // Headscale registration after it proves compute is absent.
+      tsHostname: sandbox.container_name,
+      sshPort: dbNode.ssh_port ?? DEFAULT_SSH_PORT,
+      sshUser: dbNode.ssh_user ?? DEFAULT_SSH_USERNAME,
+      hostKeyFingerprint: dbNode.host_key_fingerprint ?? undefined,
+    };
   }
 
   /**

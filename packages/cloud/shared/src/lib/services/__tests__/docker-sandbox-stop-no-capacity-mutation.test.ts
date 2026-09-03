@@ -29,6 +29,7 @@ mock.module("../docker-ssh", () => ({
   },
 }));
 
+import { agentSandboxesRepository } from "../../../db/repositories/agent-sandboxes";
 import { dockerNodesRepository } from "../../../db/repositories/docker-nodes";
 import { DockerSandboxProvider } from "../docker-sandbox-provider";
 
@@ -102,6 +103,38 @@ describe("provider stop never mutates node capacity", () => {
       kind: "not-running-proven",
     });
     expect(decrementSpy).not.toHaveBeenCalled();
+  });
+
+  test("a restarted worker can delete a failed provision before ports were assigned", async () => {
+    execBehavior = async () => {
+      throw new Error("Error response from daemon: No such container: agent-x");
+    };
+    const sandboxLookup = spyOn(agentSandboxesRepository, "findBySandboxId").mockResolvedValue({
+      id: SANDBOX_ID,
+      sandbox_id: SANDBOX_ID,
+      node_id: NODE_ID,
+      container_name: SANDBOX_ID,
+      bridge_port: null,
+      web_ui_port: null,
+    } as never);
+    const nodeLookup = spyOn(dockerNodesRepository, "findByNodeId").mockResolvedValue({
+      node_id: NODE_ID,
+      hostname: "138.201.80.125",
+      ssh_port: 22,
+      ssh_user: "root",
+      host_key_fingerprint: "test-fingerprint",
+    } as never);
+    const provider = new DockerSandboxProvider();
+
+    try {
+      await expect(provider.stopForDeletion(SANDBOX_ID)).resolves.toEqual({
+        kind: "not-running-proven",
+      });
+      expect(decrementSpy).not.toHaveBeenCalled();
+    } finally {
+      sandboxLookup.mockRestore();
+      nodeLookup.mockRestore();
+    }
   });
 
   test("an unreachable container retains its capacity for reconciliation", async () => {
