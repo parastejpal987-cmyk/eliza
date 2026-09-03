@@ -70,6 +70,8 @@ let decrementSpy: ReturnType<typeof spyOn>;
 beforeEach(() => {
   // Headscale deletion is skipped when unconfigured.
   delete process.env.HEADSCALE_API_KEY;
+  delete process.env.CONTAINERS_PREPULL_SELF_HEAL_RESTART;
+  delete process.env.ELIZA_CONTAINERS_PREPULL_SELF_HEAL_RESTART;
   decrementSpy = spyOn(dockerNodesRepository, "decrementAllocated");
 });
 
@@ -181,6 +183,34 @@ describe("provider stop never mutates node capacity", () => {
     seedContainer(provider);
 
     await expect(provider.stopForDeletion(SANDBOX_ID)).rejects.toThrow(/Failed to stop container/);
+    expect(decrementSpy).not.toHaveBeenCalled();
+  });
+
+  test("an opted-in deletion recovers a twice-timed-out Docker daemon before exact removal", async () => {
+    process.env.CONTAINERS_PREPULL_SELF_HEAL_RESTART = "true";
+    const commands: string[] = [];
+    execBehavior = async (command) => {
+      commands.push(command);
+      if (command.startsWith("sh -lc")) return "unknown\n";
+      if (command.startsWith("docker stop") || command.startsWith("docker rm")) {
+        throw new Error(
+          "[docker-ssh] Command timed out after 25000ms on 138.201.80.125: docker [redacted]",
+        );
+      }
+      return "";
+    };
+    const provider = new DockerSandboxProvider();
+    seedContainer(provider);
+
+    await expect(provider.stopForDeletion(SANDBOX_ID)).resolves.toEqual({
+      kind: "not-running-proven",
+    });
+    expect(commands.some((command) => command.includes("/etc/docker/daemon.json"))).toBe(true);
+    expect(
+      commands.some((command) =>
+        command.includes(`timeout -k 2s 20s docker rm -f '${SANDBOX_ID}'`),
+      ),
+    ).toBe(true);
     expect(decrementSpy).not.toHaveBeenCalled();
   });
 

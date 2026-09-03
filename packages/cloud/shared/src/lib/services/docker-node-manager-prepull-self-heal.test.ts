@@ -127,10 +127,14 @@ describe("tracked pre-pull commands", () => {
   test("builds a force recovery command for a daemon whose graceful restart hangs", () => {
     const command = buildPrePullSelfHealRecoverCommand();
 
+    expect(command).toStartWith("set -e; ");
+    expect(command).toContain("/etc/docker/daemon.json");
+    expect(command).toContain('get("live-restore") is True');
     expect(command).toContain("systemctl kill -s SIGKILL docker.service docker.socket");
     expect(command).toContain("systemctl restart containerd");
     expect(command).toContain("systemctl reset-failed docker.service");
     expect(command).toContain("systemctl start docker.service");
+    expect(command).toContain("timeout -k 2s 20s docker info");
     expect(command).not.toContain("systemctl restart docker");
   });
 });

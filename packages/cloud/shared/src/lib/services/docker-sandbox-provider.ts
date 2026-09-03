@@ -41,8 +41,10 @@ import {
   isNodeUnreachableMessage,
 } from "./docker-error-classifier";
 import {
+  buildPrePullSelfHealRecoverCommand,
   clearPlacementCommandFailures,
   dockerNodeManager,
+  isDockerSshCommandTimeoutError,
   notePlacementCommandFailure,
 } from "./docker-node-manager";
 import { getUsedDockerHostPorts } from "./docker-port-allocation";
@@ -1663,6 +1665,7 @@ export async function probeDockerMeshJoinTerminalFailure(
  */
 const STOP_CMD_TIMEOUT_MS = 25_000;
 const TEARDOWN_ABSENCE_PROBE_TIMEOUT_MS = 12_000;
+const TEARDOWN_DOCKER_SELF_HEAL_TIMEOUT_MS = 45_000;
 
 /** Cap on best-effort Headscale VPN cleanup during sandbox teardown. */
 const HEADSCALE_CLEANUP_TIMEOUT_MS = 15_000;
@@ -5417,6 +5420,67 @@ export class DockerSandboxProvider implements SandboxProvider {
             disconnectError instanceof Error ? disconnectError.message : String(disconnectError),
         });
       });
+    }
+
+    // A reachable host whose Docker CLI times out on both stop and force-rm is
+    // a wedged daemon, not an ordinary container failure. Repeating the same
+    // two RPCs left deletion tombstones permanently stuck. Staging may opt in
+    // to the same node recovery already used by pre-pull: it first proves
+    // live-restore is configured, restarts the daemon stack in a fresh session,
+    // proves Docker responsive, and then retries the exact-name force remove.
+    // Production remains unchanged until its protected environment explicitly
+    // enables the flag after staging acceptance.
+    if (
+      allowUnreachableAbandon &&
+      stopErr &&
+      rmErr &&
+      isDockerSshCommandTimeoutError(stopErr, "docker") &&
+      isDockerSshCommandTimeoutError(rmErr, "docker") &&
+      containersEnv.prePullSelfHealRestartEnabled()
+    ) {
+      const recoverySsh = DockerSSHClient.createDedicated(
+        meta.hostname,
+        meta.sshPort,
+        meta.hostKeyFingerprint,
+        meta.sshUser,
+      );
+      try {
+        logger.error("[docker-sandbox] Docker teardown timed out twice; recovering daemon", {
+          nodeId: meta.nodeId,
+          containerName: meta.containerName,
+        });
+        await recoverySsh.exec(
+          buildPrePullSelfHealRecoverCommand(),
+          TEARDOWN_DOCKER_SELF_HEAL_TIMEOUT_MS,
+        );
+        await recoverySsh.exec(
+          `timeout -k 2s 20s docker rm -f ${shellQuote(meta.containerName)}`,
+          STOP_CMD_TIMEOUT_MS,
+        );
+        stopErr = undefined;
+        rmErr = undefined;
+        logger.info("[docker-sandbox] Docker daemon recovered and container removed", {
+          nodeId: meta.nodeId,
+          containerName: meta.containerName,
+        });
+      } catch (recoveryError) {
+        logger.error("[docker-sandbox] Docker daemon recovery did not prove container removal", {
+          nodeId: meta.nodeId,
+          containerName: meta.containerName,
+          failureKind: classifyDockerSshProbeError(recoveryError),
+        });
+      } finally {
+        await recoverySsh.disconnect().catch((disconnectError) => {
+          // error-policy:J6 the recovery/remove verdict above is authoritative;
+          // closing its isolated SSH session is teardown-only cleanup.
+          logger.warn("[docker-sandbox] Failed to close daemon-recovery SSH session", {
+            nodeId: meta.nodeId,
+            containerName: meta.containerName,
+            error:
+              disconnectError instanceof Error ? disconnectError.message : String(disconnectError),
+          });
+        });
+      }
     }
 
     let outcome: SandboxDeletionStopOutcome = { kind: "not-running-proven" };

@@ -351,6 +351,12 @@ describe("managed dedicated live-smoke workflow contract", () => {
       "dedicated_delete_failure_category=",
     );
     expect(lifecycleJournal?.run ?? lifecycleJournal?.with?.script).toContain(
+      "dedicated_docker_recovery=",
+    );
+    expect(lifecycleJournal?.run ?? lifecycleJournal?.with?.script).toContain(
+      "docker daemon recovered and container removed",
+    );
+    expect(lifecycleJournal?.run ?? lifecycleJournal?.with?.script).toContain(
       "docker_command_timeout",
     );
     expect(lifecycleJournal?.run ?? lifecycleJournal?.with?.script).toContain(

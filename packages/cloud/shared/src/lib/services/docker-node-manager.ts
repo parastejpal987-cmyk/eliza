@@ -655,12 +655,15 @@ export function buildPrePullReapCommand(pidFile: string, image: string): string 
 
 export function buildPrePullSelfHealRecoverCommand(): string {
   return [
+    "set -e",
+    'python3 -c \'import json; assert json.load(open("/etc/docker/daemon.json")).get("live-restore") is True\'',
     "systemctl kill -s SIGKILL docker.service docker.socket 2>/dev/null",
     "sleep 2",
     "systemctl restart containerd 2>/dev/null",
     "sleep 4",
     "systemctl reset-failed docker.service 2>/dev/null",
     "systemctl start docker.service",
+    "timeout -k 2s 20s docker info >/dev/null",
   ].join("; ");
 }
 

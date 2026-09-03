@@ -1697,7 +1697,8 @@ jobs:
             for signal in \
               provision_completed heartbeat_grace heartbeat_disconnected \
               terminal_database restart_enqueued disconnected_recovery \
-              delete_started delete_completed delete_failed credential_revocation; do
+              delete_started delete_completed delete_failed credential_revocation \
+              docker_recovery_started docker_recovery_completed docker_recovery_failed; do
               case "$signal:$lower" in
                 provision_completed:*'agent_provision completed'*) matched=true ;;
                 heartbeat_grace:*'heartbeat miss within grace window'*) matched=true ;;
@@ -1709,6 +1710,9 @@ jobs:
                 delete_completed:*'agent_delete completed'*) matched=true ;;
                 delete_failed:*'marked sandbox as deletion_failed'*|*'unknown agent_delete failure'*) matched=true ;;
                 credential_revocation:*'inference revocation'*|*'revokeforagent'*) matched=true ;;
+                docker_recovery_started:*'docker teardown timed out twice; recovering daemon'*) matched=true ;;
+                docker_recovery_completed:*'docker daemon recovered and container removed'*) matched=true ;;
+                docker_recovery_failed:*'docker daemon recovery did not prove container removal'*) matched=true ;;
                 *) matched=false ;;
               esac
               if [ "$matched" = true ]; then
@@ -1781,10 +1785,17 @@ jobs:
               *'marked sandbox as deletion_failed'*) delete_category='permanent_failure_unclassified' ;;
               *) delete_category='none' ;;
             esac
+            case "$lower" in
+              *'docker daemon recovered and container removed'*) docker_recovery='completed' ;;
+              *'docker daemon recovery did not prove container removal'*) docker_recovery='failed' ;;
+              *'docker teardown timed out twice; recovering daemon'*) docker_recovery='started' ;;
+              *) docker_recovery='not_attempted' ;;
+            esac
             unset block lower CANARY_AGENT_ID CANARY_DELETE_JOB_ID
             echo "dedicated_lifecycle_signals=${signals:-none}"
             echo "dedicated_heartbeat_failure_category=$heartbeat_category"
             echo "dedicated_delete_failure_category=$delete_category"
+            echo "dedicated_docker_recovery=$docker_recovery"
 
       - name: Upload privacy-safe provision diagnostic
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
