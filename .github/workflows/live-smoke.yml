@@ -1373,22 +1373,24 @@ jobs:
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2
         env:
           CANARY_AGENT_ID: ${{ steps.cleanup_reconciliation.outputs.agent_id }}
+          CANARY_DIAGNOSTIC_SUFFIX: ${{ inputs.diagnose_canary_suffix }}
         with:
           host: ${{ secrets.ELIZA_PROVISIONING_HOST }}
           username: deploy
           key: ${{ secrets.ELIZA_PROVISIONING_SSH_KEY }}
           command_timeout: 2m
-          envs: CANARY_AGENT_ID
+          envs: CANARY_AGENT_ID,CANARY_DIAGNOSTIC_SUFFIX
           script: |
             set -euo pipefail
             [[ "$CANARY_AGENT_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]] || exit 1
+            [[ "$CANARY_DIAGNOSTIC_SUFFIX" =~ ^[a-z0-9-]{8,80}$ ]] || exit 1
             block="$(
               sudo journalctl \
                 -u headscale.service \
                 --since '4 hours ago' \
                 -o cat \
                 --no-pager 2>/dev/null \
-                | grep -F -B 12 -A 12 "$CANARY_AGENT_ID" \
+                | grep -F -B 12 -A 12 "$CANARY_DIAGNOSTIC_SUFFIX" \
                 | tail -n 1200 \
                 || true
             )"
