@@ -1023,15 +1023,17 @@ jobs:
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2
         env:
           CANARY_HEADSCALE_IP: ${{ steps.cleanup_reconciliation.outputs.headscale_ip }}
+          CANARY_DIAGNOSTIC_SUFFIX: ${{ inputs.diagnose_canary_suffix }}
         with:
           host: ${{ secrets.ELIZA_PROVISIONING_HOST }}
           username: deploy
           key: ${{ secrets.ELIZA_PROVISIONING_SSH_KEY }}
           command_timeout: 2m
-          envs: CANARY_HEADSCALE_IP
+          envs: CANARY_HEADSCALE_IP,CANARY_DIAGNOSTIC_SUFFIX
           script: |
             set -euo pipefail
             [[ "$CANARY_HEADSCALE_IP" =~ ^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.([0-9]{1,3})\.([0-9]{1,3})$ ]] || exit 1
+            [[ "$CANARY_DIAGNOSTIC_SUFFIX" =~ ^[a-z0-9-]{8,80}$ ]] || exit 1
             status_json="$(sudo tailscale status --json 2>/dev/null || true)"
             backend="$(jq -r '.BackendState // "unknown"' <<<"$status_json" 2>/dev/null || echo unknown)"
             self_ip=false
@@ -1045,6 +1047,25 @@ jobs:
             fi
             if jq -e --arg ip "$CANARY_HEADSCALE_IP" '[.Peer[]? | select(((.TailscaleIPs // []) | index($ip)) and .Online == true)] | length == 1' <<<"$status_json" >/dev/null 2>&1; then
               peer_online=true
+            fi
+            suffix_peer_count="$(jq -r --arg suffix "$CANARY_DIAGNOSTIC_SUFFIX" '[.Peer[]? | select(((.HostName // "") | contains($suffix)) or ((.DNSName // "") | contains($suffix)))] | length' <<<"$status_json" 2>/dev/null || echo 0)"
+            suffix_peer_online_count="$(jq -r --arg suffix "$CANARY_DIAGNOSTIC_SUFFIX" '[.Peer[]? | select((((.HostName // "") | contains($suffix)) or ((.DNSName // "") | contains($suffix))) and .Online == true)] | length' <<<"$status_json" 2>/dev/null || echo 0)"
+            suffix_peer_ip="$(jq -r --arg suffix "$CANARY_DIAGNOSTIC_SUFFIX" '[.Peer[]? | select(((.HostName // "") | contains($suffix)) or ((.DNSName // "") | contains($suffix)))] | if length == 1 then (.[0].TailscaleIPs[0] // "") else "" end' <<<"$status_json" 2>/dev/null || true)"
+            suffix_ip_matches_database=false
+            suffix_route_tailnet=false
+            suffix_ping_reachable=false
+            suffix_health_reachable=false
+            if [[ "$suffix_peer_ip" =~ ^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.([0-9]{1,3})\.([0-9]{1,3})$ ]]; then
+              [ "$suffix_peer_ip" = "$CANARY_HEADSCALE_IP" ] && suffix_ip_matches_database=true
+              suffix_route_device="$(ip route get "$suffix_peer_ip" 2>/dev/null | awk '{ for (i = 1; i <= NF; i += 1) if ($i == "dev") { print $(i + 1); exit } }')"
+              [ "$suffix_route_device" = tailscale0 ] && suffix_route_tailnet=true
+              if timeout --signal=TERM --kill-after=2s 12s sudo tailscale ping --timeout=5s --c=1 "$suffix_peer_ip" >/dev/null 2>&1; then
+                suffix_ping_reachable=true
+              fi
+              suffix_health_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --connect-timeout 5 --max-time 10 "http://$suffix_peer_ip:2138/api/health" 2>/dev/null || true)"
+              case "$suffix_health_status" in
+                200|301|302|401) suffix_health_reachable=true ;;
+              esac
             fi
             route_device="$(ip route get "$CANARY_HEADSCALE_IP" 2>/dev/null | awk '{ for (i = 1; i <= NF; i += 1) if ($i == "dev") { print $(i + 1); exit } }')"
             route_tailnet=false
@@ -1069,8 +1090,17 @@ jobs:
             echo "control_plane_canary_route_tailscale0=$route_tailnet"
             echo "control_plane_canary_ping_reachable=$ping_reachable"
             echo "control_plane_canary_health_reachable=$health_reachable"
+            echo "control_plane_suffix_peer_count=$suffix_peer_count"
+            echo "control_plane_suffix_peer_online_count=$suffix_peer_online_count"
+            echo "control_plane_suffix_ip_matches_database=$suffix_ip_matches_database"
+            echo "control_plane_suffix_route_tailscale0=$suffix_route_tailnet"
+            echo "control_plane_suffix_ping_reachable=$suffix_ping_reachable"
+            echo "control_plane_suffix_health_reachable=$suffix_health_reachable"
             unset status_json backend self_ip peer_present peer_online route_device route_tailnet \
-              ping_reachable health_status health_reachable CANARY_HEADSCALE_IP
+              ping_reachable health_status health_reachable suffix_peer_count suffix_peer_online_count \
+              suffix_peer_ip suffix_ip_matches_database suffix_route_device suffix_route_tailnet \
+              suffix_ping_reachable suffix_health_status suffix_health_reachable CANARY_HEADSCALE_IP \
+              CANARY_DIAGNOSTIC_SUFFIX
 
       - name: Classify control-plane replacement cleanup failure
         if: steps.cleanup_reconciliation.outputs.fence_present == 'true'
