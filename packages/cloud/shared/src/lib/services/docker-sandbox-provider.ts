@@ -5436,9 +5436,12 @@ export class DockerSandboxProvider implements SandboxProvider {
         ? isAlreadyGoneMessage(rmErr instanceof Error ? rmErr.message : String(rmErr))
         : isContainerAbsentMessage(rmErr instanceof Error ? rmErr.message : String(rmErr)));
     const dockerSelfHealEnabled = containersEnv.prePullSelfHealRestartEnabled();
+    const stopFailureKind =
+      stopErr !== undefined ? classifyDockerSshProbeError(stopErr) : undefined;
+    const rmFailureKind = rmErr !== undefined ? classifyDockerSshProbeError(rmErr) : undefined;
 
     if (stopErr && rmErr) {
-      logger.info("[docker-sandbox] Docker teardown recovery decision", {
+      logger.warn("[docker-sandbox] Docker teardown recovery decision", {
         nodeId: meta.nodeId,
         containerName: meta.containerName,
         agentId: meta.agentId,
@@ -5448,25 +5451,28 @@ export class DockerSandboxProvider implements SandboxProvider {
         rmCommandTimedOut,
         stopFailureProvesGone,
         rmFailureProvesGone,
-        stopFailureKind: classifyDockerSshProbeError(stopErr),
-        rmFailureKind: classifyDockerSshProbeError(rmErr),
+        stopFailureKind,
+        rmFailureKind,
       });
     }
 
     // One exact Docker-command timeout proves that SSH reached the node but the
-    // daemon failed to answer. The other leg may fail at the connection layer
-    // or return a remote Docker-daemon error, so requiring both errors to have
-    // the same transport classification skips a real wedged-node sequence.
-    // Neither failure may prove absence. The fresh recovery session still
-    // proves live-restore before mutation, Docker health after restart, and
-    // exact-name removal. Production remains protected-off until staging proof.
+    // daemon failed to answer. A pair of transport failures can also be a
+    // poisoned SSH session, so the isolated recovery connection first proves
+    // live-restore and re-probes Docker. A healthy daemon is never restarted;
+    // an unavailable daemon is restarted without touching containerd, then
+    // health and exact-name removal are proved. Remote command failures such as
+    // auth/permission errors remain ineligible. Production remains protected-off
+    // until staging proof.
     if (
       allowUnreachableAbandon &&
       stopErr &&
       rmErr &&
       !stopFailureProvesGone &&
       !rmFailureProvesGone &&
-      (stopCommandTimedOut || rmCommandTimedOut) &&
+      (stopCommandTimedOut ||
+        rmCommandTimedOut ||
+        (stopFailureKind === "transport" && rmFailureKind === "transport")) &&
       dockerSelfHealEnabled
     ) {
       const recoverySsh = DockerSSHClient.createDedicated(
@@ -5477,7 +5483,7 @@ export class DockerSandboxProvider implements SandboxProvider {
       );
       let recoveryStage = "live_restore_proof";
       try {
-        logger.error("[docker-sandbox] Docker teardown timed out twice; recovering daemon", {
+        logger.error("[docker-sandbox] Docker teardown failed twice; probing daemon recovery", {
           nodeId: meta.nodeId,
           containerName: meta.containerName,
           agentId: meta.agentId,
@@ -5486,21 +5492,30 @@ export class DockerSandboxProvider implements SandboxProvider {
           'python3 -c \'import json; assert json.load(open("/etc/docker/daemon.json")).get("live-restore") is True\'',
           TEARDOWN_DOCKER_SELF_HEAL_STAGE_TIMEOUT_MS,
         );
-        recoveryStage = "docker_force_stop";
-        await recoverySsh.exec(
-          "systemctl kill --kill-who=main -s SIGKILL docker.service 2>/dev/null || true; systemctl stop docker.socket 2>/dev/null || true; sleep 2",
-          TEARDOWN_DOCKER_SELF_HEAL_STAGE_TIMEOUT_MS,
-        );
-        recoveryStage = "docker_start";
-        await recoverySsh.exec(
-          "systemctl reset-failed docker.service 2>/dev/null; systemctl start docker.service",
-          TEARDOWN_DOCKER_SELF_HEAL_STAGE_TIMEOUT_MS,
-        );
-        recoveryStage = "docker_info";
-        await recoverySsh.exec(
-          "timeout -k 2s 20s docker info >/dev/null",
-          TEARDOWN_DOCKER_SELF_HEAL_STAGE_TIMEOUT_MS,
-        );
+        recoveryStage = "docker_info_probe";
+        const dockerHealth = (
+          await recoverySsh.exec(
+            "if timeout -k 2s 20s docker info >/dev/null 2>&1; then printf healthy; else printf unavailable; fi",
+            TEARDOWN_DOCKER_SELF_HEAL_STAGE_TIMEOUT_MS,
+          )
+        ).trim();
+        if (dockerHealth !== "healthy") {
+          recoveryStage = "docker_force_stop";
+          await recoverySsh.exec(
+            "systemctl kill --kill-who=main -s SIGKILL docker.service 2>/dev/null || true; systemctl stop docker.socket 2>/dev/null || true; sleep 2",
+            TEARDOWN_DOCKER_SELF_HEAL_STAGE_TIMEOUT_MS,
+          );
+          recoveryStage = "docker_start";
+          await recoverySsh.exec(
+            "systemctl reset-failed docker.service 2>/dev/null; systemctl start docker.service",
+            TEARDOWN_DOCKER_SELF_HEAL_STAGE_TIMEOUT_MS,
+          );
+          recoveryStage = "docker_info";
+          await recoverySsh.exec(
+            "timeout -k 2s 20s docker info >/dev/null",
+            TEARDOWN_DOCKER_SELF_HEAL_STAGE_TIMEOUT_MS,
+          );
+        }
         recoveryStage = "exact_container_remove";
         await recoverySsh.exec(
           `timeout -k 2s 20s docker rm -f ${shellQuote(meta.containerName)}`,

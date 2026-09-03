@@ -1706,7 +1706,7 @@ jobs:
                 --no-pager 2>/dev/null \
                 | grep -F -A 12 \
                     -e '[docker-sandbox] Docker teardown recovery decision' \
-                    -e '[docker-sandbox] Docker teardown timed out twice; recovering daemon' \
+                    -e '[docker-sandbox] Docker teardown failed twice; probing daemon recovery' \
                     -e '[docker-sandbox] Docker daemon recovered and container removed' \
                     -e '[docker-sandbox] Docker daemon recovery did not prove container removal' \
                 | tail -n 240 \
@@ -1730,7 +1730,7 @@ jobs:
                 delete_completed:*'agent_delete completed'*) matched=true ;;
                 delete_failed:*'marked sandbox as deletion_failed'*|*'unknown agent_delete failure'*) matched=true ;;
                 credential_revocation:*'inference revocation'*|*'revokeforagent'*) matched=true ;;
-                docker_recovery_started:*'docker teardown timed out twice; recovering daemon'*) matched=true ;;
+                docker_recovery_started:*'docker teardown failed twice; probing daemon recovery'*) matched=true ;;
                 docker_recovery_completed:*'docker daemon recovered and container removed'*) matched=true ;;
                 docker_recovery_failed:*'docker daemon recovery did not prove container removal'*) matched=true ;;
                 *) matched=false ;;
@@ -1808,15 +1808,16 @@ jobs:
             case "$lower" in
               *'docker daemon recovered and container removed'*) docker_recovery='completed' ;;
               *'docker daemon recovery did not prove container removal'*) docker_recovery='failed' ;;
-              *'docker teardown timed out twice; recovering daemon'*) docker_recovery='started' ;;
+              *'docker teardown failed twice; probing daemon recovery'*) docker_recovery='started' ;;
               *) docker_recovery='not_attempted' ;;
             esac
-            recent_recovery_started_count="$(printf '%s\n' "$recent_recovery_lower" | grep -Fc 'docker teardown timed out twice; recovering daemon' || true)"
+            recent_recovery_started_count="$(printf '%s\n' "$recent_recovery_lower" | grep -Fc 'docker teardown failed twice; probing daemon recovery' || true)"
             recent_recovery_completed_count="$(printf '%s\n' "$recent_recovery_lower" | grep -Fc 'docker daemon recovered and container removed' || true)"
             recent_recovery_failed_count="$(printf '%s\n' "$recent_recovery_lower" | grep -Fc 'docker daemon recovery did not prove container removal' || true)"
             recent_recovery_decision_count="$(printf '%s\n' "$recent_recovery_lower" | grep -Fc 'docker teardown recovery decision' || true)"
             case "$recent_recovery_lower" in
               *'recoverystage'*'live_restore_proof'*) docker_recovery_stage='live_restore_proof' ;;
+              *'recoverystage'*'docker_info_probe'*) docker_recovery_stage='docker_info_probe' ;;
               *'recoverystage'*'docker_force_stop'*) docker_recovery_stage='docker_force_stop' ;;
               *'recoverystage'*'docker_start'*) docker_recovery_stage='docker_start' ;;
               *'recoverystage'*'docker_info'*) docker_recovery_stage='docker_info' ;;
