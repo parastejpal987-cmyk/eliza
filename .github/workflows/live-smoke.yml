@@ -1175,22 +1175,24 @@ jobs:
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2
         env:
           CANARY_AGENT_ID: ${{ steps.cleanup_reconciliation.outputs.agent_id }}
+          CANARY_DIAGNOSTIC_SUFFIX: ${{ inputs.diagnose_canary_suffix }}
         with:
           host: ${{ secrets.ELIZA_PROVISIONING_HOST }}
           username: deploy
           key: ${{ secrets.ELIZA_PROVISIONING_SSH_KEY }}
           command_timeout: 2m
-          envs: CANARY_AGENT_ID
+          envs: CANARY_AGENT_ID,CANARY_DIAGNOSTIC_SUFFIX
           script: |
             set -euo pipefail
             [[ "$CANARY_AGENT_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]] || exit 1
+            [[ "$CANARY_DIAGNOSTIC_SUFFIX" =~ ^r[1-9][0-9]{7,19}a[1-9][0-9]{0,3}$ ]] || exit 1
             block="$(
               sudo journalctl \
                 -u eliza-provisioning-worker.service \
                 --since '4 hours ago' \
                 -o cat \
                 --no-pager 2>/dev/null \
-                | grep -F -B 12 -A 12 "$CANARY_AGENT_ID" \
+                | grep -F -B 12 -A 12 "$CANARY_DIAGNOSTIC_SUFFIX" \
                 | tail -n 1200 \
                 || true
             )"
@@ -1426,7 +1428,36 @@ jobs:
             else
               category='no_exact_registration_log'
             fi
-            unset block lower CANARY_AGENT_ID
+            inventory="$(sudo headscale nodes list -o json 2>/dev/null)"
+            expected_node_name="managed-dedicated-canary-${CANARY_DIAGNOSTIC_SUFFIX}-${CANARY_AGENT_ID:0:12}"
+            inventory_summary="$(
+              jq -r --arg suffix "$CANARY_DIAGNOSTIC_SUFFIX" --arg expected "$expected_node_name" '
+                [
+                  .[]
+                  | select((.name // "") | contains($suffix))
+                ] as $nodes
+                | ($nodes | map(select(.name == $expected))) as $exact
+                | ($nodes | map(select(
+                    (.name // "") as $name
+                    | ($name | startswith($expected + "-")) and
+                      (($name | ltrimstr($expected + "-")) | test("^[a-z0-9]{8}$"))
+                  ))) as $suffixed
+                | [
+                    "headscale_canary_node_count=" + (($nodes | length) | tostring),
+                    "headscale_canary_node_online_count=" + ([$nodes[] | select(.online == true)] | length | tostring),
+                    "headscale_canary_node_ip_count=" + ([$nodes[] | select(((.ipAddresses // .ip_addresses // []) | length) > 0)] | length | tostring),
+                    "headscale_canary_node_name_category=" + (
+                      if ($exact | length) > 0 then "exact"
+                      elif ($suffixed | length) > 0 then "collision_suffix"
+                      elif ($nodes | length) > 0 then "unexpected_suffix"
+                      else "absent"
+                      end
+                    )
+                  ]
+                | .[]
+              ' <<<"$inventory"
+            )"
+            unset block lower CANARY_AGENT_ID CANARY_DIAGNOSTIC_SUFFIX inventory expected_node_name
             echo "headscale_registration_category=$category"
             echo "headscale_registration_request_seen=$request_seen"
             echo "headscale_preauth_registration_seen=$preauth_registration"
@@ -1436,6 +1467,8 @@ jobs:
             echo "headscale_ownership_error_seen=$ownership_error"
             echo "headscale_registration_timeout_seen=$timed_out"
             echo "headscale_tag_rejection_seen=$tag_rejected"
+            printf '%s\n' "$inventory_summary"
+            unset inventory_summary
 
       - name: Summarize Headscale ingress protocol
         if: steps.cleanup_reconciliation.outputs.agent_id != ''
