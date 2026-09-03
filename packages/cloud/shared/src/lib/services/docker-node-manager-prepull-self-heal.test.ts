@@ -131,6 +131,9 @@ describe("tracked pre-pull commands", () => {
     expect(command).toContain("/etc/docker/daemon.json");
     expect(command).toContain('get("live-restore") is True');
     expect(command).toContain("systemctl kill -s SIGKILL docker.service docker.socket");
+    expect(command).toContain(
+      "systemctl kill -s SIGKILL docker.service docker.socket 2>/dev/null || true",
+    );
     expect(command).toContain("systemctl restart containerd");
     expect(command).toContain("systemctl reset-failed docker.service");
     expect(command).toContain("systemctl start docker.service");

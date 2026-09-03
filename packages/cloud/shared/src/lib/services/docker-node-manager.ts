@@ -657,7 +657,11 @@ export function buildPrePullSelfHealRecoverCommand(): string {
   return [
     "set -e",
     'python3 -c \'import json; assert json.load(open("/etc/docker/daemon.json")).get("live-restore") is True\'',
-    "systemctl kill -s SIGKILL docker.service docker.socket 2>/dev/null",
+    // A socket unit commonly has no process of its own. systemctl then returns
+    // non-zero even when the Docker daemon was killed, so this destructive
+    // best-effort leg must not trip set -e before the required restart and
+    // docker-info proof run.
+    "systemctl kill -s SIGKILL docker.service docker.socket 2>/dev/null || true",
     "sleep 2",
     "systemctl restart containerd 2>/dev/null",
     "sleep 4",
