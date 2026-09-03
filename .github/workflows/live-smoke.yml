@@ -1133,20 +1133,6 @@ jobs:
                 || true
             )"
             lower="$(printf '%s' "$block" | tr '[:upper:]' '[:lower:]')"
-            recent_recovery_block="$(
-              sudo journalctl \
-                -u eliza-provisioning-worker.service \
-                --since '3 hours ago' \
-                -o cat \
-                --no-pager 2>/dev/null \
-                | grep -F -A 12 \
-                    -e '[docker-sandbox] Docker teardown timed out twice; recovering daemon' \
-                    -e '[docker-sandbox] Docker daemon recovered and container removed' \
-                    -e '[docker-sandbox] Docker daemon recovery did not prove container removal' \
-                | tail -n 240 \
-                || true
-            )"
-            recent_recovery_lower="$(printf '%s' "$recent_recovery_block" | tr '[:upper:]' '[:lower:]')"
             case "$lower" in
               '') category='missing' ;;
               *'permission denied'*|*'publickey'*|*'authentication methods failed'*) category='ssh_auth' ;;
@@ -1712,6 +1698,20 @@ jobs:
                 | tail -n 1200 \
             )"
             lower="$(printf '%s' "$block" | tr '[:upper:]' '[:lower:]')"
+            recent_recovery_block="$(
+              sudo journalctl \
+                -u eliza-provisioning-worker.service \
+                --since '3 hours ago' \
+                -o cat \
+                --no-pager 2>/dev/null \
+                | grep -F -A 12 \
+                    -e '[docker-sandbox] Docker teardown timed out twice; recovering daemon' \
+                    -e '[docker-sandbox] Docker daemon recovered and container removed' \
+                    -e '[docker-sandbox] Docker daemon recovery did not prove container removal' \
+                | tail -n 240 \
+                || true
+            )"
+            recent_recovery_lower="$(printf '%s' "$recent_recovery_block" | tr '[:upper:]' '[:lower:]')"
             signals=''
             for signal in \
               provision_completed heartbeat_grace heartbeat_disconnected \
