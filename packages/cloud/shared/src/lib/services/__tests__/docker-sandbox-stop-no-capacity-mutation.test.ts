@@ -22,8 +22,9 @@ import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:
 let execBehavior: (command: string) => Promise<string> = async () => "";
 mock.module("../docker-ssh", () => ({
   DockerSSHClient: {
-    getClient: () => ({
+    createDedicated: () => ({
       exec: async (command: string) => execBehavior(command),
+      disconnect: async () => {},
     }),
   },
 }));

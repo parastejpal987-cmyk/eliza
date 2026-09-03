@@ -225,7 +225,8 @@ describe("managed dedicated live-smoke workflow contract", () => {
     expect(headscaleApiInventory?.run).not.toContain('echo "$inventory"');
 
     const controlPlaneRoute = diagnostic.steps.find(
-      (step) => step.name === "Inspect control-plane route to exact canary peer",
+      (step) =>
+        step.name === "Inspect control-plane route to exact canary peer",
     );
     expect(controlPlaneRoute?.env?.CANARY_DIAGNOSTIC_SUFFIX).toBe(
       githubExpression("inputs.diagnose_canary_suffix"),
@@ -348,6 +349,15 @@ describe("managed dedicated live-smoke workflow contract", () => {
     );
     expect(lifecycleJournal?.run ?? lifecycleJournal?.with?.script).toContain(
       "dedicated_delete_failure_category=",
+    );
+    expect(lifecycleJournal?.run ?? lifecycleJournal?.with?.script).toContain(
+      "docker_command_timeout",
+    );
+    expect(lifecycleJournal?.run ?? lifecycleJournal?.with?.script).toContain(
+      "docker_connect_timeout",
+    );
+    expect(lifecycleJournal?.run ?? lifecycleJournal?.with?.script).toContain(
+      "docker_connection_error",
     );
     expect(lifecycleJournal?.run ?? lifecycleJournal?.with?.script).toContain(
       "timestamp_shape_invalid",

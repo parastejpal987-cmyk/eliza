@@ -1746,6 +1746,9 @@ jobs:
               *'inference revocation boundary is unavailable'*) delete_category='inference_revocation_unavailable' ;;
               *'inference revocation durable object binding is missing'*) delete_category='inference_revocation_binding_missing' ;;
               *'refusing to delete without a current backup'*) delete_category='pre_delete_capture_refused' ;;
+              *'[docker-ssh] command timed out'*) delete_category='docker_command_timeout' ;;
+              *'[docker-ssh] connection to '*'timed out'*) delete_category='docker_connect_timeout' ;;
+              *'[docker-ssh] connection error'*) delete_category='docker_connection_error' ;;
               *'failed to delete sandbox'*) delete_category='sandbox_stop_failed' ;;
               *'value.toisostring is not a function'*) delete_category='timestamp_shape_invalid' ;;
               *'still owns backup catalog v2 authority'*) delete_category='backup_catalog_authority_retained' ;;

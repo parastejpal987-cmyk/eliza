@@ -5301,7 +5301,11 @@ export class DockerSandboxProvider implements SandboxProvider {
       `[docker-sandbox] Stopping container ${meta.containerName} on ${meta.nodeId} (${meta.hostname})`,
     );
 
-    const ssh = DockerSSHClient.getClient(
+    // Teardown gets an isolated session. A timed-out command can leave an SSH
+    // connection alive while its channel is poisoned; keeping that connection
+    // in the shared pool made every agent_delete retry inherit the same broken
+    // transport even after the container was already absent.
+    const ssh = DockerSSHClient.createDedicated(
       meta.hostname,
       meta.sshPort,
       meta.hostKeyFingerprint,
@@ -5318,24 +5322,54 @@ export class DockerSandboxProvider implements SandboxProvider {
     let rmErr: unknown;
 
     try {
-      // Graceful stop with 10s timeout, then force-remove
-      await ssh.exec(`docker stop -t 10 ${shellQuote(meta.containerName)}`, STOP_CMD_TIMEOUT_MS);
-      logger.info(`[docker-sandbox] Container stopped: ${meta.containerName}`);
-    } catch (err) {
-      stopErr = err;
-      logger.warn(
-        `[docker-sandbox] docker stop failed for ${meta.containerName}: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
+      try {
+        // Graceful stop with 10s timeout, then force-remove.
+        await ssh.exec(`docker stop -t 10 ${shellQuote(meta.containerName)}`, STOP_CMD_TIMEOUT_MS);
+        logger.info(`[docker-sandbox] Container stopped: ${meta.containerName}`);
+      } catch (err) {
+        stopErr = err;
+        logger.warn(
+          `[docker-sandbox] docker stop failed for ${meta.containerName}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        if (classifyDockerSshProbeError(err) === "transport") {
+          // The stop did not return a remote exit code. Reconnect before the
+          // authoritative rm so a stale or poisoned channel cannot consume the
+          // entire delete retry budget by being reused unchanged.
+          await ssh.disconnect().catch((disconnectError) => {
+            // error-policy:J6 best-effort teardown reconnect; rm immediately
+            // opens a fresh session and remains the authoritative absence test.
+            logger.warn(`[docker-sandbox] Failed to reset teardown SSH session`, {
+              nodeId: meta.nodeId,
+              containerName: meta.containerName,
+              error:
+                disconnectError instanceof Error
+                  ? disconnectError.message
+                  : String(disconnectError),
+            });
+          });
+        }
+      }
 
-    try {
-      await ssh.exec(`docker rm -f ${shellQuote(meta.containerName)}`, STOP_CMD_TIMEOUT_MS);
-      logger.info(`[docker-sandbox] Container removed: ${meta.containerName}`);
-    } catch (err) {
-      rmErr = err;
-      logger.error(
-        `[docker-sandbox] docker rm failed for ${meta.containerName}: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      try {
+        await ssh.exec(`docker rm -f ${shellQuote(meta.containerName)}`, STOP_CMD_TIMEOUT_MS);
+        logger.info(`[docker-sandbox] Container removed: ${meta.containerName}`);
+      } catch (err) {
+        rmErr = err;
+        logger.error(
+          `[docker-sandbox] docker rm failed for ${meta.containerName}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    } finally {
+      await ssh.disconnect().catch((disconnectError) => {
+        // error-policy:J6 best-effort teardown session cleanup; stop/rm results
+        // above, not disconnect, determine whether absence was proven.
+        logger.warn(`[docker-sandbox] Failed to close teardown SSH session`, {
+          nodeId: meta.nodeId,
+          containerName: meta.containerName,
+          error:
+            disconnectError instanceof Error ? disconnectError.message : String(disconnectError),
+        });
+      });
     }
 
     let outcome: SandboxDeletionStopOutcome = { kind: "not-running-proven" };
